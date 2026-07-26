@@ -1,19 +1,18 @@
 "use server";
 
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { logAdminAction } from "@/app/dashboard/lib/audit-log";
+import type { AddressVerificationStatus, Community } from "@/lib/communities/types";
 
 const PAGE_SIZE = 20;
 
-export type Community = {
-  id: string;
-  name: string | null;
-  description: string | null;
-  category: string | null;
-  visibility: string | null;
-  members_count: number;
-  posts_count: number;
-  created_at: string | null;
-};
+export type { Community };
+
+const COMMUNITY_COLUMNS =
+  "id,name,description,category,visibility,members_count,posts_count,created_at," +
+  "community_type,address,lat,lng,address_verification_status,address_reviewed_by,address_reviewed_at," +
+  "is_plus,is_plus_source,is_plus_granted_by,is_plus_granted_at";
 
 export type CommunityMember = {
   user_id: string;
@@ -41,7 +40,7 @@ export async function fetchCommunities(
 
   let dataQuery = supabaseAdmin
     .from("communities")
-    .select("id,name,description,category,visibility,members_count,posts_count,created_at")
+    .select(COMMUNITY_COLUMNS)
     .order("created_at", { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1);
 
@@ -62,6 +61,28 @@ export async function fetchCommunities(
     communities: (data ?? []) as Community[],
     totalCount: count ?? 0,
   };
+}
+
+export async function fetchAddressVerificationQueue(): Promise<Community[]> {
+  const { data, error } = await supabaseAdmin
+    .from("communities")
+    .select(COMMUNITY_COLUMNS)
+    .eq("address_verification_status", "pending")
+    .order("address_reviewed_at", { ascending: true, nullsFirst: true });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Community[];
+}
+
+export async function fetchPlusCommunities(): Promise<Community[]> {
+  const { data, error } = await supabaseAdmin
+    .from("communities")
+    .select(COMMUNITY_COLUMNS)
+    .eq("is_plus", true)
+    .order("is_plus_granted_at", { ascending: false, nullsFirst: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Community[];
 }
 
 export async function fetchCommunityMembers(communityId: string): Promise<CommunityMember[]> {
@@ -136,4 +157,86 @@ export async function updateCommunityMemberRole(
     .eq("community_id", communityId)
     .eq("user_id", userId);
   if (error) throw new Error(error.message);
+}
+
+export async function setCommunityType(
+  communityId: string,
+  communityType: "standard" | "brokerage"
+): Promise<void> {
+  const admin = await getCurrentAdmin();
+  const { data: before, error: fetchError } = await supabaseAdmin
+    .from("communities")
+    .select("name,community_type")
+    .eq("id", communityId)
+    .maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+
+  const { error } = await supabaseAdmin
+    .from("communities")
+    .update({ community_type: communityType })
+    .eq("id", communityId);
+  if (error) throw new Error(error.message);
+
+  await logAdminAction({
+    category: "admin",
+    action: "set_community_type",
+    detail: `Changed community "${before?.name ?? communityId}" type: ${before?.community_type ?? "?"} → ${communityType}`,
+    targetType: "community",
+    targetId: communityId,
+    actorId: admin.id,
+    actorLabel: admin.email,
+  });
+}
+
+export async function reviewCommunityAddress(
+  communityId: string,
+  status: AddressVerificationStatus
+): Promise<Community> {
+  const admin = await getCurrentAdmin();
+
+  const { data, error } = await supabaseAdmin.rpc("admin_review_community_address", {
+    p_community_id: communityId,
+    p_status: status,
+    p_reviewer_id: admin.id,
+  });
+  if (error) throw new Error(error.message);
+
+  await logAdminAction({
+    category: "moderation",
+    action: "review_community_address",
+    detail: `Set address verification for community (${communityId}) to "${status}"`,
+    targetType: "community",
+    targetId: communityId,
+    actorId: admin.id,
+    actorLabel: admin.email,
+  });
+
+  return data as Community;
+}
+
+export async function setCommunityIsPlus(
+  communityId: string,
+  isPlus: boolean,
+  reason?: string
+): Promise<Community> {
+  const admin = await getCurrentAdmin();
+
+  const { data, error } = await supabaseAdmin.rpc("admin_set_community_is_plus", {
+    p_community_id: communityId,
+    p_is_plus: isPlus,
+    p_granted_by: admin.id,
+  });
+  if (error) throw new Error(error.message);
+
+  await logAdminAction({
+    category: "admin",
+    action: isPlus ? "grant_community_plus" : "revoke_community_plus",
+    detail: `${isPlus ? "Granted" : "Revoked"} Plus for community (${communityId})${reason ? ` — ${reason}` : ""}`,
+    targetType: "community",
+    targetId: communityId,
+    actorId: admin.id,
+    actorLabel: admin.email,
+  });
+
+  return data as Community;
 }

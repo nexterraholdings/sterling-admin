@@ -3,56 +3,72 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: Promise<{ id: string; commentId: string }> }
-) {
+const ACTIONS = new Set(["hide", "unhide", "pin", "unpin", "delete"]);
+
+type Ctx = { params: Promise<{ id: string; commentId: string }> };
+
+export async function PATCH(req: NextRequest, { params }: Ctx) {
   const admin = await getCurrentAdmin();
   const { id, commentId } = await params;
+  let action = "";
+  try {
+    const body = await req.json();
+    action = String(body?.action ?? "");
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  if (!ACTIONS.has(action)) {
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+  }
 
   try {
-    const { data: comment, error: fetchError } = await supabaseAdmin
-      .from("area_discussion_comments")
-      .select("id,body")
-      .eq("id", commentId)
-      .eq("discussion_id", id)
-      .maybeSingle();
-    if (fetchError) throw new Error(fetchError.message);
-    if (!comment) return NextResponse.json({ error: "Comment not found" }, { status: 404 });
-
-    const { error: deleteError } = await supabaseAdmin
-      .from("area_discussion_comments")
-      .delete()
-      .eq("id", commentId);
-    if (deleteError) throw new Error(deleteError.message);
-
-    const { data: discussion, error: countError } = await supabaseAdmin
-      .from("area_discussions")
-      .select("comment_count")
-      .eq("id", id)
-      .maybeSingle();
-    if (countError) throw new Error(countError.message);
-
-    if (discussion) {
-      const { error: updateError } = await supabaseAdmin
-        .from("area_discussions")
-        .update({ comment_count: Math.max(0, (discussion.comment_count ?? 1) - 1) })
-        .eq("id", id);
-      if (updateError) throw new Error(updateError.message);
-    }
+    const { data, error } = await supabaseAdmin.rpc("admin_moderate_discussion_comment", {
+      p_comment_id: commentId,
+      p_action: action,
+    });
+    if (error) throw new Error(error.message);
 
     await logAdminAction({
       category: "moderation",
-      action: "delete_discussion_comment",
-      detail: `Deleted comment ${commentId} on discussion ${id}: "${comment.body.slice(0, 80)}"`,
+      action: `moderate_discussion_comment_${action}`,
+      detail: `${action} comment ${commentId} on hub ${id}`,
       targetType: "area_discussion_comment",
       targetId: commentId,
       actorId: admin.id,
       actorLabel: admin.email,
     });
 
-    return NextResponse.json({ ok: true });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message || "Failed to delete comment" }, { status: 500 });
+    return NextResponse.json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to moderate comment";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const admin = await getCurrentAdmin();
+  const { id, commentId } = await params;
+
+  try {
+    const { data, error } = await supabaseAdmin.rpc("admin_moderate_discussion_comment", {
+      p_comment_id: commentId,
+      p_action: "delete",
+    });
+    if (error) throw new Error(error.message);
+
+    await logAdminAction({
+      category: "moderation",
+      action: "delete_discussion_comment",
+      detail: `Deleted comment ${commentId} on hub ${id}`,
+      targetType: "area_discussion_comment",
+      targetId: commentId,
+      actorId: admin.id,
+      actorLabel: admin.email,
+    });
+
+    return NextResponse.json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to delete comment";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

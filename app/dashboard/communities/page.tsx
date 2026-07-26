@@ -1,16 +1,26 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   fetchCommunities,
   fetchCommunityMembers,
+  fetchAddressVerificationQueue,
   updateCommunity,
   deleteCommunity,
   removeCommunityMember,
   updateCommunityMemberRole,
+  setCommunityType,
+  reviewCommunityAddress,
+  setCommunityIsPlus,
   type Community,
   type CommunityMember,
 } from "./actions";
+import {
+  COMMUNITY_TYPE_LABEL,
+  ADDRESS_VERIFICATION_LABEL,
+  type CommunityType,
+  type AddressVerificationStatus,
+} from "@/lib/communities/types";
 import { Tabs } from "@/components/dashboard/Tabs";
 import { Pagination } from "@/components/ui/Pagination";
 
@@ -37,6 +47,46 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function CommunityTypeBadge({ type }: { type: CommunityType }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+        type === "brokerage" ? "bg-violet-500/15 text-violet-300" : "bg-zinc-800 text-zinc-400"
+      }`}
+    >
+      {COMMUNITY_TYPE_LABEL[type]}
+    </span>
+  );
+}
+
+function VerificationBadge({ status }: { status: AddressVerificationStatus }) {
+  const styles: Record<AddressVerificationStatus, string> = {
+    unverified: "bg-zinc-800 text-zinc-400",
+    pending: "bg-amber-500/15 text-amber-300",
+    verified: "bg-emerald-500/15 text-emerald-300",
+    rejected: "bg-rose-500/15 text-rose-300",
+  };
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${styles[status]}`}>
+      {ADDRESS_VERIFICATION_LABEL[status]}
+    </span>
+  );
+}
+
+function PlusPill({ community }: { community: Community }) {
+  if (!community.is_plus) return null;
+  const title =
+    community.is_plus_source === "manual" ? "Manually granted by an admin" : "Granted via billing";
+  return (
+    <span
+      title={title}
+      className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-300"
+    >
+      ★ Plus
+    </span>
+  );
+}
+
 function EditCommunityPanel({
   community,
   onClose,
@@ -51,9 +101,13 @@ function EditCommunityPanel({
     description: community.description ?? "",
     category: community.category ?? "",
     visibility: community.visibility ?? "public",
+    community_type: community.community_type ?? "standard",
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [plusBusy, setPlusBusy] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [live, setLive] = useState(community);
 
   function set(key: string, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -70,11 +124,45 @@ function EditCommunityPanel({
         visibility: form.visibility || null,
       };
       await updateCommunity(community.id, updates);
-      onSaved({ ...community, ...updates });
+      if (form.community_type !== live.community_type) {
+        await setCommunityType(community.id, form.community_type as CommunityType);
+      }
+      const updated = { ...live, ...updates, community_type: form.community_type as CommunityType };
+      setLive(updated);
+      onSaved(updated);
     } catch (e: any) {
       setSaveError(e.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handlePlusToggle(next: boolean) {
+    const reason = next
+      ? window.prompt("Reason for granting Plus (e.g. paid via invoice)?") ?? undefined
+      : window.prompt("Reason for revoking Plus?") ?? undefined;
+    setPlusBusy(true);
+    try {
+      const updated = await setCommunityIsPlus(community.id, next, reason);
+      setLive(updated);
+      onSaved(updated);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setPlusBusy(false);
+    }
+  }
+
+  async function handleAddressReview(status: AddressVerificationStatus) {
+    setReviewBusy(true);
+    try {
+      const updated = await reviewCommunityAddress(community.id, status);
+      setLive(updated);
+      onSaved(updated);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setReviewBusy(false);
     }
   }
 
@@ -92,6 +180,11 @@ function EditCommunityPanel({
             <p className="mt-0.5 text-sm text-zinc-500">
               {community.name ?? "Untitled"}
             </p>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <CommunityTypeBadge type={live.community_type} />
+              <VerificationBadge status={live.address_verification_status} />
+              <PlusPill community={live} />
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -141,6 +234,19 @@ function EditCommunityPanel({
                 <option value="private">Private</option>
               </select>
             </Field>
+            <Field label="Community type">
+              <select
+                className={selectCls}
+                value={form.community_type}
+                onChange={(e) => set("community_type", e.target.value)}
+              >
+                <option value="standard">Standard</option>
+                <option value="brokerage">Brokerage (commercial)</option>
+              </select>
+              <p className="mt-1.5 text-xs text-zinc-500">
+                Brokerage communities can post listings/deals and collect leads.
+              </p>
+            </Field>
           </div>
 
           {saveError && (
@@ -148,6 +254,64 @@ function EditCommunityPanel({
               {saveError}
             </p>
           )}
+
+          {live.address_verification_status === "pending" && (
+            <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+              <p className="text-sm font-semibold text-amber-200">Address verification pending</p>
+              <p className="mt-1 text-xs leading-relaxed text-amber-300/80">
+                {live.address || "No address submitted"}
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => handleAddressReview("verified")}
+                  disabled={reviewBusy}
+                  className="rounded-full bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/25 disabled:opacity-50"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => handleAddressReview("rejected")}
+                  disabled={reviewBusy}
+                  className="rounded-full bg-rose-500/10 px-3.5 py-1.5 text-xs font-semibold text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/20 disabled:opacity-50"
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
+            <p className="text-sm font-semibold text-zinc-100">Plus / Premium</p>
+            <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+              Paid plans aren&apos;t wired to real billing yet — this is a manual override for brokerages that paid
+              out-of-band.
+            </p>
+            {live.is_plus && (
+              <p className="mt-2 text-xs text-zinc-400">
+                {live.is_plus_source === "manual" ? "Manually granted" : "Granted via billing"}
+                {live.is_plus_granted_at && ` on ${new Date(live.is_plus_granted_at).toLocaleDateString()}`}
+              </p>
+            )}
+            <div className="mt-3">
+              {live.is_plus ? (
+                <button
+                  onClick={() => handlePlusToggle(false)}
+                  disabled={plusBusy}
+                  className="rounded-full bg-rose-500/10 px-3.5 py-1.5 text-xs font-semibold text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/20 disabled:opacity-50"
+                >
+                  {plusBusy ? "Working…" : "Revoke Plus"}
+                </button>
+              ) : (
+                <button
+                  onClick={() => handlePlusToggle(true)}
+                  disabled={plusBusy}
+                  className="rounded-full bg-amber-500/15 px-3.5 py-1.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/30 transition hover:bg-amber-500/25 disabled:opacity-50"
+                >
+                  {plusBusy ? "Working…" : "Grant Plus"}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
@@ -327,15 +491,24 @@ function CommunityRow({
     <tr className="hover:bg-zinc-800/60 transition-colors">
       <td className="px-6 py-4">
         <div>
-          <p className="font-medium text-zinc-50">
-            {community.name ?? "Untitled"}
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="font-medium text-zinc-50">
+              {community.name ?? "Untitled"}
+            </p>
+            <PlusPill community={community} />
+          </div>
           {community.description && (
             <p className="mt-1 line-clamp-1 text-xs text-zinc-500">
               {community.description}
             </p>
           )}
         </div>
+      </td>
+      <td className="px-6 py-4">
+        <CommunityTypeBadge type={community.community_type} />
+      </td>
+      <td className="px-6 py-4">
+        <VerificationBadge status={community.address_verification_status} />
       </td>
       <td className="px-6 py-4">
         {community.category ? (
@@ -416,6 +589,8 @@ function CommunityRowSkeleton() {
       </td>
       <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
+      <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
+      <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-4 w-12 animate-pulse rounded bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-4 w-12 animate-pulse rounded bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-4 w-20 animate-pulse rounded bg-zinc-700" /></td>
@@ -424,7 +599,7 @@ function CommunityRowSkeleton() {
   );
 }
 
-const TABLE_HEADERS = ["Community", "Category", "Visibility", "Members", "Posts", "Created", ""];
+const TABLE_HEADERS = ["Community", "Type", "Verification", "Category", "Visibility", "Members", "Posts", "Created", ""];
 
 function TableHead() {
   return (
@@ -459,7 +634,10 @@ function CommunitiesTableSkeleton() {
 // Main page
 // ---------------------------------------------------------------------------
 
+type PageView = "all" | "queue";
+
 export default function CommunitiesPage() {
+  const [pageView, setPageView] = useState<PageView>("all");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [communities, setCommunities] = useState<Community[]>([]);
@@ -470,6 +648,10 @@ export default function CommunitiesPage() {
   const [viewingMembers, setViewingMembers] = useState<Community | null>(null);
   const [deletingCommunity, setDeletingCommunity] = useState<Community | null>(null);
 
+  const [queueCommunities, setQueueCommunities] = useState<Community[]>([]);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueError, setQueueError] = useState<string | null>(null);
+
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(t);
@@ -478,6 +660,23 @@ export default function CommunitiesPage() {
   useEffect(() => {
     loadCommunities(1);
   }, [debouncedSearch]);
+
+  const loadQueue = useCallback(async () => {
+    setQueueLoading(true);
+    setQueueError(null);
+    try {
+      const data = await fetchAddressVerificationQueue();
+      setQueueCommunities(data);
+    } catch (e: any) {
+      setQueueError(e.message);
+    } finally {
+      setQueueLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadQueue();
+  }, [loadQueue]);
 
   async function loadCommunities(page: number) {
     setLoading(true);
@@ -500,6 +699,11 @@ export default function CommunitiesPage() {
   function handleSaved(updated: Community) {
     setCommunities((prev) =>
       prev.map((c) => (c.id === updated.id ? updated : c))
+    );
+    setQueueCommunities((prev) =>
+      updated.address_verification_status === "pending"
+        ? prev.map((c) => (c.id === updated.id ? updated : c))
+        : prev.filter((c) => c.id !== updated.id)
     );
     setEditingCommunity(null);
   }
@@ -545,7 +749,25 @@ export default function CommunitiesPage() {
           </div>
         </div>
 
+        <div className="mt-5 max-w-md">
+          <Tabs
+            tabs={[
+              { id: "all", label: "All communities", color: "emerald" },
+              {
+                id: "queue",
+                label: queueCommunities.length > 0 ? `Verification queue (${queueCommunities.length})` : "Verification queue",
+                color: "amber",
+              },
+            ]}
+            defaultTab="all"
+            variant="segmented"
+            onChange={(id) => setPageView(id as PageView)}
+          />
+        </div>
+
         {/* Search */}
+        {pageView === "all" && (
+        <>
         <div className="relative mt-5">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -622,6 +844,66 @@ export default function CommunitiesPage() {
             </>
           )}
         </div>
+        </>
+        )}
+
+        {/* Verification queue */}
+        {pageView === "queue" && (
+          <div className="mt-6">
+            {queueError ? (
+              <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{queueError}</div>
+            ) : queueLoading ? (
+              <CommunitiesTableSkeleton />
+            ) : queueCommunities.length === 0 ? (
+              <div className="flex h-48 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
+                No brokerage addresses waiting on review.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {queueCommunities.map((community) => (
+                  <div
+                    key={community.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-zinc-50">{community.name ?? "Untitled"}</p>
+                        <CommunityTypeBadge type={community.community_type} />
+                      </div>
+                      <p className="mt-1 text-xs text-zinc-400">{community.address || "No address submitted"}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={async () => {
+                          const updated = await reviewCommunityAddress(community.id, "verified");
+                          handleSaved(updated);
+                        }}
+                        className="rounded-full bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/25"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const updated = await reviewCommunityAddress(community.id, "rejected");
+                          handleSaved(updated);
+                        }}
+                        className="rounded-full bg-rose-500/10 px-3.5 py-1.5 text-xs font-semibold text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/20"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={() => setEditingCommunity(community)}
+                        className="rounded-full border border-zinc-700 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800"
+                      >
+                        View
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Edit panel */}

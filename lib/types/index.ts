@@ -22,7 +22,23 @@ export interface UserProfile {
   account_role: string;
   moderation_strike_count: number;
   phone_number?: string | null;
+  /** Present when loaded with auth presence check */
+  has_auth?: boolean;
 }
+
+export interface AuthUserRow {
+  id: UUID;
+  email?: string | null;
+  phone?: string | null;
+  created_at: string;
+  last_sign_in_at?: string | null;
+  banned_until?: string | null;
+  has_profile: boolean;
+  profile_username?: string | null;
+  profile_full_name?: string | null;
+}
+
+export type UserDeleteTarget = "both" | "auth" | "profile";
 
 export interface Post {
   id: UUID;

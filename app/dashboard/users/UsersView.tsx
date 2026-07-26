@@ -1,15 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import type { UserProfile } from "@/lib/types";
+import type { AuthUserRow, UserDeleteTarget, UserProfile } from "@/lib/types";
 import { Tabs } from "@/components/dashboard/Tabs";
 import { Pagination } from "@/components/ui/Pagination";
 import { banUser, type BanType } from "@/app/dashboard/banned-users/actions";
 import { strikeUser } from "@/app/dashboard/moderation/actions";
 import {
   fetchProfiles,
+  fetchAuthUsers,
+  fetchProfileAuthPresence,
   updateProfile,
-  deleteUserAccount,
+  deleteUserByTarget,
+  deleteUsersByTarget,
   type FetchFilter,
 } from "@/app/dashboard/users/actions";
 import {
@@ -356,6 +359,160 @@ function DevicesSection({ userId }: { userId: string }) {
   );
 }
 
+function PresenceBadge({
+  present,
+  label,
+}: {
+  present: boolean;
+  label: string;
+}) {
+  return (
+    <span
+      className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
+        present
+          ? "bg-emerald-500/15 text-emerald-300"
+          : "bg-amber-500/15 text-amber-300"
+      }`}
+    >
+      {present ? `${label} ✓` : `No ${label}`}
+    </span>
+  );
+}
+
+function DeleteTargetForm({
+  label,
+  hasAuth,
+  hasProfile,
+  deleting,
+  deleteError,
+  onCancel,
+  onConfirm,
+}: {
+  label: string;
+  hasAuth: boolean;
+  hasProfile: boolean;
+  deleting: boolean;
+  deleteError: string | null;
+  onCancel: () => void;
+  onConfirm: (target: UserDeleteTarget) => void;
+}) {
+  const defaultTarget: UserDeleteTarget =
+    hasAuth && hasProfile ? "both" : hasAuth ? "auth" : "profile";
+  const [target, setTarget] = useState<UserDeleteTarget>(defaultTarget);
+  const [confirmText, setConfirmText] = useState("");
+
+  const warning =
+    target === "auth"
+      ? "Removes the auth identity only. Any profile row will be left orphaned."
+      : target === "profile"
+      ? "Removes the profiles row only. The user can still sign in if auth remains."
+      : "Permanently deletes auth.users (and cascaded public data). This cannot be undone.";
+
+  return (
+    <div className="mt-6 space-y-4 rounded-2xl border border-rose-500/30 bg-rose-500/5 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wider text-rose-300">
+        Delete account
+      </p>
+      <p className="text-sm text-zinc-400">
+        Choose what to remove for{" "}
+        <span className="font-medium text-zinc-200">{label}</span>.
+      </p>
+
+      <div className="space-y-2">
+        {(
+          [
+            {
+              id: "both" as const,
+              title: "Both (recommended)",
+              enabled: hasAuth,
+              hint: "Auth + cascaded data (profile removed via cascade)",
+            },
+            {
+              id: "auth" as const,
+              title: "Auth only",
+              enabled: hasAuth,
+              hint: "auth.users only — leaves profile if present",
+            },
+            {
+              id: "profile" as const,
+              title: "Profile only",
+              enabled: hasProfile,
+              hint: "profiles row only — leaves auth if present",
+            },
+          ] as const
+        ).map((opt) => (
+          <label
+            key={opt.id}
+            className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 transition ${
+              !opt.enabled
+                ? "cursor-not-allowed border-zinc-800 bg-zinc-950/40 opacity-40"
+                : target === opt.id
+                ? "border-rose-500/40 bg-rose-500/10"
+                : "border-zinc-800 bg-zinc-950/60 hover:border-zinc-700"
+            }`}
+          >
+            <input
+              type="radio"
+              name="delete-target"
+              className="mt-1"
+              checked={target === opt.id}
+              disabled={!opt.enabled || deleting}
+              onChange={() => setTarget(opt.id)}
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-zinc-200">
+                {opt.title}
+              </span>
+              <span className="block text-xs text-zinc-500">{opt.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <p className="text-xs text-amber-300/90">{warning}</p>
+
+      <Field label='Type "DELETE" to confirm'>
+        <input
+          className={inputCls}
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          placeholder="DELETE"
+          disabled={deleting}
+        />
+      </Field>
+
+      {deleteError && (
+        <p className="rounded-xl bg-rose-500/20 px-4 py-3 text-sm text-rose-300">
+          {deleteError}
+        </p>
+      )}
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={onCancel}
+          disabled={deleting}
+          className="rounded-full border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => onConfirm(target)}
+          disabled={
+            deleting ||
+            confirmText !== "DELETE" ||
+            (target === "both" && !hasAuth) ||
+            (target === "auth" && !hasAuth) ||
+            (target === "profile" && !hasProfile)
+          }
+          className="rounded-full bg-rose-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {deleting ? "Deleting…" : "Delete"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EditUserPanel({
   user,
   onClose,
@@ -365,7 +522,7 @@ function EditUserPanel({
   user: UserProfile;
   onClose: () => void;
   onSaved: (updated: UserProfile) => void;
-  onDeleted: (userId: string) => void;
+  onDeleted: (userId: string, target: UserDeleteTarget) => void;
 }) {
   const [form, setForm] = useState({
     full_name: user.full_name ?? "",
@@ -395,7 +552,9 @@ function EditUserPanel({
   const [showDeleteForm, setShowDeleteForm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+
+  const hasAuth = user.has_auth !== false;
+  const hasProfile = true;
 
   function set(key: string, value: string | number) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -439,12 +598,15 @@ function EditUserPanel({
     }
   }
 
-  async function handleDelete() {
+  async function handleDelete(target: UserDeleteTarget) {
     setDeleting(true);
     setDeleteError(null);
     try {
-      await deleteUserAccount(user.id);
-      onDeleted(user.id);
+      await deleteUserByTarget(user.id, target);
+      onDeleted(user.id, target);
+      if (target === "auth") {
+        setShowDeleteForm(false);
+      }
     } catch (e: any) {
       setDeleteError(e.message);
     } finally {
@@ -488,6 +650,9 @@ function EditUserPanel({
             <p className="mt-0.5 text-sm text-zinc-500">
               {user.email ?? user.username ?? user.id}
             </p>
+            <div className="mt-2">
+              <PresenceBadge present={hasAuth} label="Auth" />
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -669,53 +834,18 @@ function EditUserPanel({
           )}
 
           {showDeleteForm && (
-            <div className="mt-6 space-y-4 rounded-2xl border border-rose-500/30 bg-rose-500/5 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-rose-300">
-                Delete account
-              </p>
-              <p className="text-sm text-zinc-400">
-                This permanently deletes the account for{" "}
-                <span className="font-medium text-zinc-200">
-                  {user.email ?? user.username ?? user.id}
-                </span>
-                . This cannot be undone.
-              </p>
-              <Field label='Type "DELETE" to confirm'>
-                <input
-                  className={inputCls}
-                  value={deleteConfirmText}
-                  onChange={(e) => setDeleteConfirmText(e.target.value)}
-                  placeholder="DELETE"
-                />
-              </Field>
-
-              {deleteError && (
-                <p className="rounded-xl bg-rose-500/20 px-4 py-3 text-sm text-rose-300">
-                  {deleteError}
-                </p>
-              )}
-
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => {
-                    setShowDeleteForm(false);
-                    setDeleteError(null);
-                    setDeleteConfirmText("");
-                  }}
-                  disabled={deleting}
-                  className="rounded-full border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDelete}
-                  disabled={deleting || deleteConfirmText !== "DELETE"}
-                  className="rounded-full bg-rose-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {deleting ? "Deleting…" : "Delete account"}
-                </button>
-              </div>
-            </div>
+            <DeleteTargetForm
+              label={user.email ?? user.username ?? user.id}
+              hasAuth={hasAuth}
+              hasProfile={hasProfile}
+              deleting={deleting}
+              deleteError={deleteError}
+              onCancel={() => {
+                setShowDeleteForm(false);
+                setDeleteError(null);
+              }}
+              onConfirm={handleDelete}
+            />
           )}
         </div>
 
@@ -764,23 +894,128 @@ function EditUserPanel({
 // Table
 // ---------------------------------------------------------------------------
 
+const checkboxCls =
+  "h-4 w-4 shrink-0 rounded border-zinc-600 bg-zinc-950 text-emerald-500 focus:ring-emerald-500/40 focus:ring-offset-0";
+
+function SelectionToolbar({
+  count,
+  onClear,
+  onDelete,
+  deleting,
+}: {
+  count: number;
+  onClear: () => void;
+  onDelete: () => void;
+  deleting?: boolean;
+}) {
+  if (count === 0) return null;
+  return (
+    <div className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-zinc-700 bg-zinc-950/80 px-4 py-3">
+      <p className="text-sm text-zinc-300">
+        <span className="font-semibold text-zinc-50">{count}</span> selected
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onClear}
+          disabled={deleting}
+          className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-50"
+        >
+          Clear
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={deleting}
+          className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:border-rose-500/50 hover:bg-rose-500/20 disabled:opacity-50"
+        >
+          {deleting ? "Deleting…" : "Delete selected…"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BulkDeleteModal({
+  count,
+  hasAuth,
+  hasProfile,
+  deleting,
+  deleteError,
+  onCancel,
+  onConfirm,
+}: {
+  count: number;
+  hasAuth: boolean;
+  hasProfile: boolean;
+  deleting: boolean;
+  deleteError: string | null;
+  onCancel: () => void;
+  onConfirm: (target: UserDeleteTarget) => void;
+}) {
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+        onClick={onCancel}
+      />
+      <div className="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-2xl">
+        <DeleteTargetForm
+          label={`${count} selected user${count === 1 ? "" : "s"}`}
+          hasAuth={hasAuth}
+          hasProfile={hasProfile}
+          deleting={deleting}
+          deleteError={deleteError}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      </div>
+    </>
+  );
+}
+
 function UserRow({
   user,
+  selected,
+  onToggle,
   onEdit,
 }: {
   user: UserProfile;
+  selected: boolean;
+  onToggle: (id: string) => void;
   onEdit: (user: UserProfile) => void;
 }) {
   return (
     <tr
       onClick={() => onEdit(user)}
-      className="cursor-pointer transition-colors hover:bg-zinc-800/60"
+      className={`cursor-pointer transition-colors hover:bg-zinc-800/60 ${
+        selected ? "bg-emerald-500/5" : ""
+      }`}
     >
       <td className="px-6 py-4">
-        <p className="font-medium text-zinc-50">{user.full_name ?? user.username ?? "—"}</p>
-        {user.username && <p className="mt-0.5 text-xs text-zinc-500">@{user.username}</p>}
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            className={checkboxCls}
+            checked={selected}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onToggle(user.id)}
+            aria-label={`Select ${user.full_name ?? user.username ?? user.id}`}
+          />
+          <div className="min-w-0">
+            <p className="font-medium text-zinc-50">
+              {user.full_name ?? user.username ?? "—"}
+            </p>
+            {user.username && (
+              <p className="mt-0.5 text-xs text-zinc-500">@{user.username}</p>
+            )}
+          </div>
+        </div>
       </td>
       <td className="px-6 py-4 text-zinc-400">{user.email ?? "—"}</td>
+      <td className="px-6 py-4">
+        <PresenceBadge present={user.has_auth !== false} label="Auth" />
+      </td>
       <td className="px-6 py-4">
         <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
           {user.role ?? "—"}
@@ -846,8 +1081,14 @@ function UserRow({
 function UserRowSkeleton() {
   return (
     <tr>
-      <td className="px-6 py-4"><div className="h-4 w-32 animate-pulse rounded bg-zinc-700" /></td>
+      <td className="px-6 py-4">
+        <div className="flex items-center gap-3">
+          <div className="h-4 w-4 animate-pulse rounded bg-zinc-700" />
+          <div className="h-4 w-32 animate-pulse rounded bg-zinc-700" />
+        </div>
+      </td>
       <td className="px-6 py-4"><div className="h-4 w-40 animate-pulse rounded bg-zinc-700" /></td>
+      <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-5 w-24 animate-pulse rounded-full bg-zinc-700" /></td>
       <td className="px-6 py-4"><div className="h-5 w-16 animate-pulse rounded-full bg-zinc-700" /></td>
@@ -857,15 +1098,39 @@ function UserRowSkeleton() {
   );
 }
 
-const TABLE_HEADERS = ["User", "Email", "Role", "Markets", "Access", "Strikes", ""];
+const TABLE_HEADERS = ["User", "Email", "Auth", "Role", "Markets", "Access", "Strikes", ""];
 
-function TableHead() {
+function TableHead({
+  allSelected,
+  someSelected,
+  onToggleAll,
+}: {
+  allSelected: boolean;
+  someSelected: boolean;
+  onToggleAll: () => void;
+}) {
   return (
     <thead className="bg-zinc-800/60 text-left text-zinc-400">
       <tr>
         {TABLE_HEADERS.map((h, i) => (
           <th key={i} className="px-6 py-4 font-medium">
-            {h}
+            {i === 0 ? (
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  className={checkboxCls}
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected && !allSelected;
+                  }}
+                  onChange={onToggleAll}
+                  aria-label="Select all users on this page"
+                />
+                <span>{h}</span>
+              </div>
+            ) : (
+              h
+            )}
           </th>
         ))}
       </tr>
@@ -877,7 +1142,7 @@ function UsersTableSkeleton() {
   return (
     <div className="-mx-6 -mb-6 overflow-x-auto">
       <table className="min-w-full divide-y divide-zinc-800 text-sm">
-        <TableHead />
+        <TableHead allSelected={false} someSelected={false} onToggleAll={() => {}} />
         <tbody className="divide-y divide-zinc-800">
           {Array.from({ length: 8 }).map((_, i) => (
             <UserRowSkeleton key={i} />
@@ -885,6 +1150,518 @@ function UsersTableSkeleton() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function formatAuthDate(dateStr?: string | null): string {
+  if (!dateStr) return "—";
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function AuthUserPanel({
+  user,
+  onClose,
+  onDeleted,
+}: {
+  user: AuthUserRow;
+  onClose: () => void;
+  onDeleted: (userId: string, target: UserDeleteTarget) => void;
+}) {
+  const [showDeleteForm, setShowDeleteForm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDelete(target: UserDeleteTarget) {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteUserByTarget(user.id, target);
+      onDeleted(user.id, target);
+      if (target === "profile") {
+        setShowDeleteForm(false);
+      }
+    } catch (e: any) {
+      setDeleteError(e.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col overflow-hidden bg-zinc-900 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-5">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-50">Auth user</h2>
+            <p className="mt-0.5 text-sm text-zinc-500">
+              {user.email ?? user.phone ?? user.id}
+            </p>
+            <div className="mt-2">
+              <PresenceBadge present={user.has_profile} label="Profile" />
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-300"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+              <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-6">
+          <div className="space-y-5">
+            <Field label="User ID">
+              <p className="break-all rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-300">
+                {user.id}
+              </p>
+            </Field>
+            <Field label="Email">
+              <p className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+                {user.email ?? "—"}
+              </p>
+            </Field>
+            <Field label="Phone">
+              <p className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+                {user.phone ?? "—"}
+              </p>
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Created">
+                <p className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+                  {formatAuthDate(user.created_at)}
+                </p>
+              </Field>
+              <Field label="Last sign-in">
+                <p className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+                  {formatAuthDate(user.last_sign_in_at)}
+                </p>
+              </Field>
+            </div>
+            {user.banned_until && (
+              <Field label="Banned until">
+                <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                  {formatAuthDate(user.banned_until)}
+                </p>
+              </Field>
+            )}
+            {user.has_profile && (
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                  Linked profile
+                </p>
+                <p className="mt-2 text-sm font-medium text-zinc-200">
+                  {user.profile_full_name ?? user.profile_username ?? "—"}
+                </p>
+                {user.profile_username && (
+                  <p className="mt-0.5 text-xs text-zinc-500">@{user.profile_username}</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {showDeleteForm && (
+            <DeleteTargetForm
+              label={user.email ?? user.phone ?? user.id}
+              hasAuth
+              hasProfile={user.has_profile}
+              deleting={deleting}
+              deleteError={deleteError}
+              onCancel={() => {
+                setShowDeleteForm(false);
+                setDeleteError(null);
+              }}
+              onConfirm={handleDelete}
+            />
+          )}
+        </div>
+
+        {!showDeleteForm && (
+          <div className="flex justify-between gap-3 border-t border-zinc-800 px-6 py-4">
+            <button
+              onClick={() => setShowDeleteForm(true)}
+              className="rounded-full border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-300 transition hover:border-rose-500/50 hover:bg-rose-500/20"
+            >
+              Delete…
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded-full border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function AuthUserRow({
+  user,
+  selected,
+  onToggle,
+  onOpen,
+}: {
+  user: AuthUserRow;
+  selected: boolean;
+  onToggle: (id: string) => void;
+  onOpen: (user: AuthUserRow) => void;
+}) {
+  return (
+    <tr
+      onClick={() => onOpen(user)}
+      className={`cursor-pointer transition-colors hover:bg-zinc-800/60 ${
+        selected ? "bg-emerald-500/5" : ""
+      }`}
+    >
+      <td className="px-6 py-4">
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            className={checkboxCls}
+            checked={selected}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onToggle(user.id)}
+            aria-label={`Select ${user.email ?? user.id}`}
+          />
+          <div className="min-w-0">
+            <p className="font-medium text-zinc-50">{user.email ?? "—"}</p>
+            <p className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
+              {user.id}
+            </p>
+          </div>
+        </div>
+      </td>
+      <td className="px-6 py-4 text-zinc-400">{user.phone ?? "—"}</td>
+      <td className="px-6 py-4">
+        <PresenceBadge present={user.has_profile} label="Profile" />
+        {user.has_profile && (user.profile_username || user.profile_full_name) && (
+          <p className="mt-1 text-xs text-zinc-500">
+            {user.profile_full_name ?? `@${user.profile_username}`}
+          </p>
+        )}
+      </td>
+      <td className="px-6 py-4 text-zinc-400">{formatAuthDate(user.created_at)}</td>
+      <td className="px-6 py-4 text-zinc-400">{formatAuthDate(user.last_sign_in_at)}</td>
+      <td className="px-6 py-4">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen(user);
+          }}
+          className="rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-300"
+          title="View auth user"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-4 w-4"
+          >
+            <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
+            <path
+              fillRule="evenodd"
+              d="M.664 10.59a1.651 1.651 0 010-1.186A10.004 10.004 0 0110 3c4.257 0 7.893 2.66 9.336 6.41.147.381.146.804 0 1.186A10.004 10.004 0 0110 17c-4.257 0-7.893-2.66-9.336-6.41zM14 10a4 4 0 11-8 0 4 4 0 018 0z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+const AUTH_TABLE_HEADERS = ["Email", "Phone", "Profile", "Created", "Last sign-in", ""];
+
+function AuthTableHead({
+  allSelected,
+  someSelected,
+  onToggleAll,
+}: {
+  allSelected: boolean;
+  someSelected: boolean;
+  onToggleAll: () => void;
+}) {
+  return (
+    <thead className="bg-zinc-800/60 text-left text-zinc-400">
+      <tr>
+        {AUTH_TABLE_HEADERS.map((h, i) => (
+          <th key={i} className="px-6 py-4 font-medium">
+            {i === 0 ? (
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  className={checkboxCls}
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected && !allSelected;
+                  }}
+                  onChange={onToggleAll}
+                  aria-label="Select all auth users on this page"
+                />
+                <span>{h}</span>
+              </div>
+            ) : (
+              h
+            )}
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+}
+
+function AuthUsersTableSkeleton() {
+  return (
+    <div className="-mx-6 -mb-6 overflow-x-auto">
+      <table className="min-w-full divide-y divide-zinc-800 text-sm">
+        <AuthTableHead allSelected={false} someSelected={false} onToggleAll={() => {}} />
+        <tbody className="divide-y divide-zinc-800">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <tr key={i}>
+              <td className="px-6 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-4 w-4 animate-pulse rounded bg-zinc-700" />
+                  <div className="h-4 w-40 animate-pulse rounded bg-zinc-700" />
+                </div>
+              </td>
+              <td className="px-6 py-4"><div className="h-4 w-28 animate-pulse rounded bg-zinc-700" /></td>
+              <td className="px-6 py-4"><div className="h-5 w-20 animate-pulse rounded-full bg-zinc-700" /></td>
+              <td className="px-6 py-4"><div className="h-4 w-24 animate-pulse rounded bg-zinc-700" /></td>
+              <td className="px-6 py-4"><div className="h-4 w-24 animate-pulse rounded bg-zinc-700" /></td>
+              <td className="px-6 py-4"><div className="h-7 w-7 animate-pulse rounded-lg bg-zinc-700" /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AuthUsersTable({
+  search,
+  emptyMessage = "No auth users found",
+}: {
+  search: string;
+  emptyMessage?: string;
+}) {
+  const [users, setUsers] = useState<AuthUserRow[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selected, setSelected] = useState<AuthUserRow | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const allSelected = users.length > 0 && users.every((u) => selectedIds.has(u.id));
+  const someSelected = users.some((u) => selectedIds.has(u.id));
+  const selectedUsers = users.filter((u) => selectedIds.has(u.id));
+
+  useEffect(() => {
+    setLoading(true);
+    setUsers([]);
+    setCurrentPage(1);
+    setSelectedIds(new Set());
+
+    fetchAuthUsers(1, search)
+      .then(({ users: next, totalCount: count }) => {
+        setUsers(next);
+        setTotalCount(count);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [search]);
+
+  function goToPage(page: number) {
+    setLoading(true);
+    setSelectedIds(new Set());
+    fetchAuthUsers(page, search)
+      .then(({ users: next, totalCount: count }) => {
+        setUsers(next);
+        setTotalCount(count);
+        setCurrentPage(page);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }
+
+  function toggleId(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(users.map((u) => u.id)));
+  }
+
+  function handleDeleted(userId: string, target: UserDeleteTarget) {
+    if (target === "profile") {
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, has_profile: false } : u))
+      );
+      setSelected((prev) =>
+        prev?.id === userId ? { ...prev, has_profile: false } : prev
+      );
+      return;
+    }
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setTotalCount((prev) => Math.max(0, prev - 1));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(userId);
+      return next;
+    });
+    setSelected(null);
+  }
+
+  async function handleBulkDelete(target: UserDeleteTarget) {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBulkDeleting(true);
+    setBulkDeleteError(null);
+    try {
+      const { deleted, failed } = await deleteUsersByTarget(ids, target);
+      if (target === "profile") {
+        const deletedSet = new Set(deleted);
+        setUsers((prev) =>
+          prev.map((u) =>
+            deletedSet.has(u.id) ? { ...u, has_profile: false } : u
+          )
+        );
+      } else {
+        const deletedSet = new Set(deleted);
+        setUsers((prev) => prev.filter((u) => !deletedSet.has(u.id)));
+        setTotalCount((prev) => Math.max(0, prev - deleted.length));
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of deleted) next.delete(id);
+        return next;
+      });
+      if (failed.length > 0) {
+        setBulkDeleteError(
+          `Deleted ${deleted.length}, failed ${failed.length}: ${failed[0].error}`
+        );
+      } else {
+        setShowBulkDelete(false);
+      }
+    } catch (e: any) {
+      setBulkDeleteError(e.message);
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  if (loading && users.length === 0) {
+    return <AuthUsersTableSkeleton />;
+  }
+
+  if (!loading && users.length === 0) {
+    return (
+      <div className="flex h-48 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
+        {emptyMessage}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {selected && (
+        <AuthUserPanel
+          user={selected}
+          onClose={() => setSelected(null)}
+          onDeleted={handleDeleted}
+        />
+      )}
+
+      {showBulkDelete && (
+        <BulkDeleteModal
+          count={selectedIds.size}
+          hasAuth
+          hasProfile={selectedUsers.some((u) => u.has_profile)}
+          deleting={bulkDeleting}
+          deleteError={bulkDeleteError}
+          onCancel={() => {
+            setShowBulkDelete(false);
+            setBulkDeleteError(null);
+          }}
+          onConfirm={handleBulkDelete}
+        />
+      )}
+
+      <SelectionToolbar
+        count={selectedIds.size}
+        onClear={() => setSelectedIds(new Set())}
+        onDelete={() => setShowBulkDelete(true)}
+        deleting={bulkDeleting}
+      />
+
+      <div className="-mx-6 -mb-6 overflow-x-auto">
+        <table className="min-w-full divide-y divide-zinc-800 text-sm">
+          <AuthTableHead
+            allSelected={allSelected}
+            someSelected={someSelected}
+            onToggleAll={toggleAll}
+          />
+          <tbody className="divide-y divide-zinc-800">
+            {users.map((user) => (
+              <AuthUserRow
+                key={user.id}
+                user={user}
+                selected={selectedIds.has(user.id)}
+                onToggle={toggleId}
+                onOpen={setSelected}
+              />
+            ))}
+            {loading &&
+              Array.from({ length: 3 }).map((_, i) => (
+                <tr key={`sk-${i}`}>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-4 w-4 animate-pulse rounded bg-zinc-700" />
+                      <div className="h-4 w-40 animate-pulse rounded bg-zinc-700" />
+                    </div>
+                  </td>
+                  <td className="px-6 py-4"><div className="h-4 w-28 animate-pulse rounded bg-zinc-700" /></td>
+                  <td className="px-6 py-4"><div className="h-5 w-20 animate-pulse rounded-full bg-zinc-700" /></td>
+                  <td className="px-6 py-4"><div className="h-4 w-24 animate-pulse rounded bg-zinc-700" /></td>
+                  <td className="px-6 py-4"><div className="h-4 w-24 animate-pulse rounded bg-zinc-700" /></td>
+                  <td className="px-6 py-4"><div className="h-7 w-7 animate-pulse rounded-lg bg-zinc-700" /></td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        onPageChange={goToPage}
+        totalItems={totalCount}
+        pageSize={PAGE_SIZE}
+      />
+    </>
   );
 }
 
@@ -908,18 +1685,39 @@ function UsersTable({
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
 
   const filter: FetchFilter = { account_role: accountRole, flagged };
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const allSelected = users.length > 0 && users.every((u) => selectedIds.has(u.id));
+  const someSelected = users.some((u) => selectedIds.has(u.id));
+  const selectedUsers = users.filter((u) => selectedIds.has(u.id));
+
+  async function attachAuthPresence(profiles: UserProfile[]): Promise<UserProfile[]> {
+    if (profiles.length === 0) return profiles;
+    try {
+      const presentIds = await fetchProfileAuthPresence(profiles.map((p) => p.id));
+      const present = new Set(presentIds);
+      return profiles.map((p) => ({ ...p, has_auth: present.has(p.id) }));
+    } catch (e) {
+      console.error(e);
+      return profiles.map((p) => ({ ...p, has_auth: undefined }));
+    }
+  }
 
   useEffect(() => {
     setLoading(true);
     setUsers([]);
     setCurrentPage(1);
+    setSelectedIds(new Set());
 
     fetchProfiles(1, filter, search)
-      .then(({ profiles, totalCount }) => {
-        setUsers(profiles);
+      .then(async ({ profiles, totalCount }) => {
+        const withAuth = await attachAuthPresence(profiles);
+        setUsers(withAuth);
         setTotalCount(totalCount);
       })
       .catch(console.error)
@@ -928,9 +1726,11 @@ function UsersTable({
 
   function goToPage(page: number) {
     setLoading(true);
+    setSelectedIds(new Set());
     fetchProfiles(page, filter, search)
-      .then(({ profiles, totalCount }) => {
-        setUsers(profiles);
+      .then(async ({ profiles, totalCount }) => {
+        const withAuth = await attachAuthPresence(profiles);
+        setUsers(withAuth);
         setTotalCount(totalCount);
         setCurrentPage(page);
       })
@@ -938,15 +1738,84 @@ function UsersTable({
       .finally(() => setLoading(false));
   }
 
+  function toggleId(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(users.map((u) => u.id)));
+  }
+
   function handleSaved(updated: UserProfile) {
-    setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+    setUsers((prev) => prev.map((u) => (u.id === updated.id ? { ...u, ...updated } : u)));
     setEditingUser(null);
   }
 
-  function handleDeleted(userId: string) {
+  function handleDeleted(userId: string, target: UserDeleteTarget) {
+    if (target === "auth") {
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, has_auth: false } : u))
+      );
+      setEditingUser((prev) =>
+        prev?.id === userId ? { ...prev, has_auth: false } : prev
+      );
+      return;
+    }
     setUsers((prev) => prev.filter((u) => u.id !== userId));
     setTotalCount((prev) => Math.max(0, prev - 1));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(userId);
+      return next;
+    });
     setEditingUser(null);
+  }
+
+  async function handleBulkDelete(target: UserDeleteTarget) {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBulkDeleting(true);
+    setBulkDeleteError(null);
+    try {
+      const { deleted, failed } = await deleteUsersByTarget(ids, target);
+      if (target === "auth") {
+        const deletedSet = new Set(deleted);
+        setUsers((prev) =>
+          prev.map((u) =>
+            deletedSet.has(u.id) ? { ...u, has_auth: false } : u
+          )
+        );
+      } else {
+        const deletedSet = new Set(deleted);
+        setUsers((prev) => prev.filter((u) => !deletedSet.has(u.id)));
+        setTotalCount((prev) => Math.max(0, prev - deleted.length));
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of deleted) next.delete(id);
+        return next;
+      });
+      if (failed.length > 0) {
+        setBulkDeleteError(
+          `Deleted ${deleted.length}, failed ${failed.length}: ${failed[0].error}`
+        );
+      } else {
+        setShowBulkDelete(false);
+      }
+    } catch (e: any) {
+      setBulkDeleteError(e.message);
+    } finally {
+      setBulkDeleting(false);
+    }
   }
 
   if (loading && users.length === 0) {
@@ -972,12 +1841,44 @@ function UsersTable({
         />
       )}
 
+      {showBulkDelete && (
+        <BulkDeleteModal
+          count={selectedIds.size}
+          hasAuth={selectedUsers.some((u) => u.has_auth !== false)}
+          hasProfile
+          deleting={bulkDeleting}
+          deleteError={bulkDeleteError}
+          onCancel={() => {
+            setShowBulkDelete(false);
+            setBulkDeleteError(null);
+          }}
+          onConfirm={handleBulkDelete}
+        />
+      )}
+
+      <SelectionToolbar
+        count={selectedIds.size}
+        onClear={() => setSelectedIds(new Set())}
+        onDelete={() => setShowBulkDelete(true)}
+        deleting={bulkDeleting}
+      />
+
       <div className="-mx-6 -mb-6 overflow-x-auto">
         <table className="min-w-full divide-y divide-zinc-800 text-sm">
-          <TableHead />
+          <TableHead
+            allSelected={allSelected}
+            someSelected={someSelected}
+            onToggleAll={toggleAll}
+          />
           <tbody className="divide-y divide-zinc-800">
             {users.map((user) => (
-              <UserRow key={user.id} user={user} onEdit={setEditingUser} />
+              <UserRow
+                key={user.id}
+                user={user}
+                selected={selectedIds.has(user.id)}
+                onToggle={toggleId}
+                onEdit={setEditingUser}
+              />
             ))}
             {loading &&
               Array.from({ length: 3 }).map((_, i) => (
@@ -1012,6 +1913,11 @@ export function UserManagementView() {
     return () => clearTimeout(t);
   }, [search]);
 
+  const searchPlaceholder =
+    activeTab === "auth"
+      ? "Search auth users by email, phone, id, or profile name…"
+      : "Search by name, email, or username…";
+
   return (
     <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
       {/* Search */}
@@ -1032,7 +1938,7 @@ export function UserManagementView() {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name, email, or username…"
+          placeholder={searchPlaceholder}
           className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-2.5 pl-10 pr-4 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-500 focus:border-zinc-500 focus:bg-zinc-900 focus:ring-2 focus:ring-zinc-700"
         />
         {search !== debouncedSearch && (
@@ -1055,6 +1961,7 @@ export function UserManagementView() {
         <Tabs
           tabs={[
             { id: "all", label: "All users", color: "blue" },
+            { id: "auth", label: "Auth users", color: "violet" },
             { id: "admins", label: "Admins", color: "rose" },
             { id: "moderators", label: "Moderators", color: "amber" },
             { id: "flagged", label: "Flagged", color: "rose" },
@@ -1070,6 +1977,13 @@ export function UserManagementView() {
       <div className="mt-6">
         {activeTab === "all" && (
           <UsersTable key="all" search={debouncedSearch} />
+        )}
+        {activeTab === "auth" && (
+          <AuthUsersTable
+            key="auth"
+            search={debouncedSearch}
+            emptyMessage="No auth users found"
+          />
         )}
         {activeTab === "admins" && (
           <UsersTable

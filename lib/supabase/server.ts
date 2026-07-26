@@ -41,6 +41,20 @@ function createMockClient() {
 
   return {
     from: (_table: string) => makeQuery(),
+    rpc: async (_fn: string, _args?: Record<string, unknown>) => ({ data: null, error: null }),
+    auth: {
+      admin: {
+        deleteUser: async (_id: string) => ({ data: null, error: null }),
+        getUserById: async (_id: string) => ({
+          data: { user: null },
+          error: { message: "User not found", status: 404 },
+        }),
+        listUsers: async () => ({
+          data: { users: [] },
+          error: null,
+        }),
+      },
+    },
   } as any;
 }
 

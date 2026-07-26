@@ -480,6 +480,41 @@ export async function saveOverride(params: {
         .single();
   if (error) throw new Error(error.message);
 
+  // Keep the locked daily selection in sync so fallback paths and older clients
+  // serve the same edited story (lock RPC is insert-only / DO NOTHING).
+  const selectionPayload = {
+    date_utc: params.dateUtc,
+    city: "",
+    state,
+    article_id: params.candidate.article_id,
+    article_url: params.candidate.article_url,
+    title: params.candidate.title,
+    description: params.candidate.description,
+    content: articleContent,
+    source: params.candidate.source,
+    image_url: params.candidate.image_url,
+    published_at: params.candidate.published_at,
+    selection_source: "override",
+    locked_at: new Date().toISOString(),
+  };
+  const { data: existingSelection, error: selectionLookupError } = await supabaseAdmin
+    .from("market_news_daily_selections")
+    .select("id")
+    .eq("date_utc", params.dateUtc)
+    .eq("state_norm", stateNorm)
+    .maybeSingle();
+  if (selectionLookupError) throw new Error(selectionLookupError.message);
+
+  const { error: selectionError } = existingSelection
+    ? await supabaseAdmin
+        .from("market_news_daily_selections")
+        .update(selectionPayload)
+        .eq("id", existingSelection.id)
+    : await supabaseAdmin
+        .from("market_news_daily_selections")
+        .insert(selectionPayload);
+  if (selectionError) throw new Error(selectionError.message);
+
   await logAdminAction({
     category: "admin",
     action: existing ? "update_news_override" : "create_news_override",

@@ -128,7 +128,7 @@ export function DiscussionDetailClient({ id }: { id: string }) {
               {copiedId ? "Copied!" : "Copy ID"}
             </button>
             <Link
-              href={`/dashboard/users?search=${discussion.creator?.username ?? hub.creator_id}`}
+              href={`/dashboard/users?search=${discussion.creator?.username ?? discussion.creator_id}`}
               className="rounded-full border border-zinc-700 bg-zinc-950 px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800"
             >
               View creator

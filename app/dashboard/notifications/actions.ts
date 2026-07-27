@@ -2,6 +2,13 @@
 
 import { Expo, type ExpoPushMessage } from "expo-server-sdk";
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import {
+  buildRouteContext,
+  validateRouteFields,
+  type NotificationRouteContext,
+} from "@/lib/notifications/definitionTypes";
+import type { NotificationTapDestination } from "@/lib/notifications/tapDestinations";
 
 const expo = new Expo();
 
@@ -168,6 +175,7 @@ export async function sendBroadcastNotification(params: {
   sendPush: boolean;
   addToInbox: boolean;
 }): Promise<BroadcastResult> {
+  await getCurrentAdmin();
   const message = params.message.trim();
   if (!message) throw new Error("Message is required");
   if (!params.sendPush && !params.addToInbox) throw new Error("Choose at least one delivery method");
@@ -178,6 +186,154 @@ export async function sendBroadcastNotification(params: {
   ]);
 
   return { push, inbox };
+}
+
+export type CustomBroadcastResult = {
+  inbox: InboxOutcome | null;
+  pushSent: number;
+  pushFailed: number;
+  pushErrors: string[];
+};
+
+async function invokePushForNotificationId(notificationId: string): Promise<boolean> {
+  const { error } = await supabaseAdmin.functions.invoke("send-notification", {
+    body: { notification_id: notificationId },
+  });
+  return !error;
+}
+
+export async function sendCustomTypeBroadcast(params: {
+  customType: string;
+  title: string;
+  body: string | null;
+  tap_destination: NotificationTapDestination;
+  routeIds: {
+    post_id?: string | null;
+    discussion_id?: string | null;
+    community_id?: string | null;
+    actor_id?: string | null;
+  };
+  sendPush: boolean;
+  addToInbox: boolean;
+}): Promise<CustomBroadcastResult> {
+  await getCurrentAdmin();
+  const title = params.title.trim();
+  if (!title) throw new Error("Title is required");
+  if (!params.sendPush && !params.addToInbox) throw new Error("Choose at least one delivery method");
+
+  const routeErr = validateRouteFields(params.tap_destination, {
+    post_id: params.routeIds.post_id ?? undefined,
+    discussion_id: params.routeIds.discussion_id ?? undefined,
+    community_id: params.routeIds.community_id ?? undefined,
+    actor_id: params.routeIds.actor_id ?? undefined,
+  });
+  if (routeErr) throw new Error(routeErr);
+
+  const { data: def, error: defErr } = await supabaseAdmin
+    .from("notification_type_definitions")
+    .select("type,enabled")
+    .eq("type", params.customType)
+    .maybeSingle();
+  if (defErr) throw new Error(defErr.message);
+  if (!def?.enabled) throw new Error("Unknown or disabled custom notification type");
+
+  const route_context: NotificationRouteContext = buildRouteContext({
+    tap_destination: params.tap_destination,
+    post_id: params.routeIds.post_id,
+    discussion_id: params.routeIds.discussion_id,
+    community_id: params.routeIds.community_id,
+    actor_id: params.routeIds.actor_id,
+  });
+
+  const allUserIds = await resolveInboxUserIds();
+  if (allUserIds.length === 0) {
+    return { inbox: { targeted: 0, inserted: 0, errors: [] }, pushSent: 0, pushFailed: 0, pushErrors: [] };
+  }
+
+  let inserted = 0;
+  const inboxErrors: string[] = [];
+  const notificationIdsForPush: string[] = [];
+
+  for (let i = 0; i < allUserIds.length; i += INBOX_INSERT_CHUNK_SIZE) {
+    const chunk = allUserIds.slice(i, i + INBOX_INSERT_CHUNK_SIZE);
+    const rows: Array<Record<string, unknown>> = [];
+
+    for (const user_id of chunk) {
+      const { data: inAppOk } = await supabaseAdmin.rpc("notification_delivery_allowed", {
+        p_user_id: user_id,
+        p_type: params.customType,
+        p_channel: "in_app",
+      });
+      const { data: pushOk } = await supabaseAdmin.rpc("notification_delivery_allowed", {
+        p_user_id: user_id,
+        p_type: params.customType,
+        p_channel: "push",
+      });
+
+      const allowInApp = params.addToInbox && inAppOk !== false;
+      const allowPush = params.sendPush && pushOk !== false;
+      if (!allowInApp && !allowPush) continue;
+
+      const id = crypto.randomUUID();
+      if (allowPush) notificationIdsForPush.push(id);
+
+      if (allowInApp || allowPush) {
+        rows.push({
+          id,
+          user_id,
+          actor_id: params.routeIds.actor_id ?? null,
+          type: params.customType,
+          title,
+          body: params.body?.trim() || null,
+          post_id: params.routeIds.post_id ?? null,
+          community_id: params.routeIds.community_id ?? null,
+          discussion_id: params.routeIds.discussion_id ?? null,
+          route_context,
+        });
+      }
+    }
+
+    if (rows.length === 0) continue;
+
+    const { error } = await supabaseAdmin.from("notifications").insert(rows);
+    if (error) {
+      inboxErrors.push(error.message);
+    } else {
+      inserted += rows.length;
+    }
+  }
+
+  let pushSent = 0;
+  let pushFailed = 0;
+  const pushErrors: string[] = [];
+
+  if (params.sendPush && notificationIdsForPush.length > 0) {
+    for (let i = 0; i < notificationIdsForPush.length; i += SEND_CONCURRENCY) {
+      const batch = notificationIdsForPush.slice(i, i + SEND_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (nid) => {
+          const ok = await invokePushForNotificationId(nid);
+          return ok;
+        }),
+      );
+      for (const ok of results) {
+        if (ok) pushSent++;
+        else {
+          pushFailed++;
+          pushErrors.push("send-notification invoke failed");
+        }
+      }
+    }
+  }
+
+  return {
+    inbox: params.addToInbox
+      ? { targeted: allUserIds.length, inserted, errors: inboxErrors }
+      : null,
+    pushSent,
+    pushFailed,
+    pushErrors: [...new Set(pushErrors)],
+  };
 }
 
 // ---------------------------------------------------------------------------

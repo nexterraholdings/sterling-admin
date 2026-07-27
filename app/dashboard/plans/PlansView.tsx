@@ -20,7 +20,6 @@ import {
   sterlingMembershipMonthlyPriceUsd,
 } from '@/lib/billing/sterlingMembershipPricing';
 
-// Mirrors Sterling/src/lib/business/sterlingMembershipPricing.ts (STERLING_MEMBERSHIP_USD).
 const REFERENCE_PLANS = [
   {
     id: 'sterling_plus',

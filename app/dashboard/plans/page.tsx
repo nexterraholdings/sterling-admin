@@ -9,8 +9,8 @@ export default function PlansPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Command</p>
           <h1 className="mt-2 text-2xl font-semibold text-zinc-50 sm:text-3xl">Plans</h1>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
-            Paid plans aren&apos;t wired to real billing yet. Use this page to manually grant or revoke Plus/Premium
-            status for brokerages that paid out-of-band, until Stripe/StoreKit billing ships.
+            RevenueCat subscriptions sync into Supabase for quotas and admin reporting. Manual Plus grants
+            below remain for out-of-band brokerages until Premium billing ties to communities automatically.
           </p>
         </div>
       </div>

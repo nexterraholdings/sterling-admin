@@ -50,7 +50,7 @@ export type DetailResponse = {
   address: ReverseGeocodedAddress | null;
   liveSessions: LiveSessionRow[];
   liveLimits: Record<string, unknown> | null;
-  auction: Record<string, unknown> | null;
+  stewardshipClaims: Array<{ user_id: string; created_at: string }>;
 };
 
 export function formatDiscussionDate(dateStr: string): string {

@@ -74,7 +74,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const d = discussion as DiscussionRow;
 
-    const [commentsRes, ratesRes, reportsRes, sessionsRes, communityRes, address, auctionRes] =
+    const [commentsRes, ratesRes, reportsRes, sessionsRes, communityRes, address, claimsRes] =
       await Promise.all([
         supabaseAdmin
           .from("area_discussion_comments")
@@ -98,7 +98,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           ? supabaseAdmin.from("communities").select("id,name").eq("id", d.community_id).maybeSingle()
           : Promise.resolve({ data: null, error: null }),
         reverseGeocode(d.center_lat, d.center_lng),
-        supabaseAdmin.rpc("get_discussion_auction", { p_discussion_id: id }),
+        supabaseAdmin
+          .from("discussion_stewardship_claims")
+          .select("user_id,created_at")
+          .eq("discussion_id", id)
+          .order("created_at", { ascending: true }),
       ]);
 
     if (commentsRes.error) throw new Error(commentsRes.error.message);
@@ -154,7 +158,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       address,
       liveSessions,
       liveLimits: liveLimitsRes.data ?? null,
-      auction: auctionRes.error ? null : auctionRes.data,
+      stewardshipClaims: claimsRes.error ? [] : (claimsRes.data ?? []),
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to fetch hub";

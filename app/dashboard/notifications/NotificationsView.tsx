@@ -12,6 +12,7 @@ import {
   type BroadcastResult,
   type NotificationTemplate,
 } from "@/app/dashboard/notifications/actions";
+import { SystemNotificationsTable } from "@/app/dashboard/notifications/SystemNotificationsTable";
 
 const inputCls =
   "w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-500 focus:border-zinc-500 focus:ring-2 focus:ring-zinc-700";
@@ -180,6 +181,8 @@ export function NotificationsView() {
 
   return (
     <div className="space-y-6">
+      <SystemNotificationsTable />
+
       <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-lg font-semibold text-zinc-50">Templates</h3>

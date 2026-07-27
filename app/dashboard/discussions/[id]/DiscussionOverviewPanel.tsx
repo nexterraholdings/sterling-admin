@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DetailResponse } from "./discussionDetailTypes";
 import { formatDiscussionDate, formatLiveDuration, profileLabel } from "./discussionDetailTypes";
+import {
+  ADMIN_DISCUSSION_LIFECYCLE_OPTIONS,
+  normalizeAdminLifecycleStatus,
+} from "@/lib/discussions/lifecycle";
 import {
   DetailAccordion,
   FilterField,
@@ -13,8 +17,6 @@ import {
   filterInputProps,
   formatRelativeTime,
 } from "../discussionUi";
-
-const LIFECYCLE_OPTIONS = ["bootstrap", "active", "grace", "claimable", "auction", "expired"] as const;
 
 const REPORT_STATUS_STYLE: Record<string, string> = {
   pending: "bg-amber-500/15 text-amber-300",
@@ -31,26 +33,15 @@ type Props = {
   onDeleted?: () => void;
 };
 
-function formatAuctionSummary(auction: Record<string, unknown>): { label: string; value: string }[] {
-  const lines: { label: string; value: string }[] = [];
-  const ends = auction.ends_at ?? auction.end_at ?? auction.closes_at;
-  if (ends) lines.push({ label: "Ends", value: formatDiscussionDate(String(ends)) });
-  const high = auction.high_bid_cents ?? auction.current_bid_cents ?? auction.top_bid_cents;
-  if (high != null) lines.push({ label: "High bid", value: `$${(Number(high) / 100).toFixed(2)}` });
-  const bids = auction.bid_count ?? auction.bids_count;
-  if (bids != null) lines.push({ label: "Bids", value: String(bids) });
-  const status = auction.status ?? auction.state;
-  if (status) lines.push({ label: "Status", value: String(status) });
-  return lines;
-}
-
 export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onDeleted }: Props) {
-  const { discussion, ratings, reports, address, liveSessions, liveLimits, auction } = data;
+  const { discussion, ratings, reports, address, liveSessions, liveLimits, stewardshipClaims } = data;
   const pendingReports = reports.filter((r) => r.status === "pending");
 
   const [editTitle, setEditTitle] = useState(discussion.title);
   const [editDescription, setEditDescription] = useState(discussion.description ?? "");
-  const [editLifecycle, setEditLifecycle] = useState(discussion.lifecycle_status);
+  const [editLifecycle, setEditLifecycle] = useState(() =>
+    normalizeAdminLifecycleStatus(discussion.lifecycle_status),
+  );
   const [editLat, setEditLat] = useState(String(discussion.center_lat));
   const [editLng, setEditLng] = useState(String(discussion.center_lng));
   const [editHint, setEditHint] = useState(discussion.location_hint ?? "");
@@ -58,6 +49,18 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
   const [autoShareUpdates, setAutoShareUpdates] = useState(discussion.auto_share_updates);
   const [autoShareFeed, setAutoShareFeed] = useState(discussion.auto_share_feed);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEditTitle(discussion.title);
+    setEditDescription(discussion.description ?? "");
+    setEditLifecycle(normalizeAdminLifecycleStatus(discussion.lifecycle_status));
+    setEditLat(String(discussion.center_lat));
+    setEditLng(String(discussion.center_lng));
+    setEditHint(discussion.location_hint ?? "");
+    setCommunityId(discussion.community_id ?? "");
+    setAutoShareUpdates(discussion.auto_share_updates);
+    setAutoShareFeed(discussion.auto_share_feed);
+  }, [discussion]);
 
   async function postJson(path: string, body?: unknown) {
     onActionError(null);
@@ -111,7 +114,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
-      if (editLifecycle !== discussion.lifecycle_status) {
+      if (editLifecycle !== normalizeAdminLifecycleStatus(discussion.lifecycle_status)) {
         const life = await fetch(`/api/admin/discussions/${id}/lifecycle`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -191,7 +194,17 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
     }
   }
 
-  const auctionLines = auction ? formatAuctionSummary(auction) : [];
+
+  const claimWindowLines: { label: string; value: string }[] = [];
+  if (discussion.claim_window_opens_at) {
+    claimWindowLines.push({ label: "Claim opens", value: formatDiscussionDate(discussion.claim_window_opens_at) });
+  }
+  if (discussion.claim_window_closes_at) {
+    claimWindowLines.push({ label: "Claim closes", value: formatDiscussionDate(discussion.claim_window_closes_at) });
+  }
+  if (stewardshipClaims.length > 0) {
+    claimWindowLines.push({ label: "Registered claimants", value: String(stewardshipClaims.length) });
+  }
   const lat = discussion.center_lat;
   const lng = discussion.center_lng;
   const osmEmbedSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.01},${lat - 0.01},${lng + 0.01},${lat + 0.01}&layer=mapnik&marker=${lat},${lng}`;
@@ -243,12 +256,19 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
               <select
                 {...filterInputProps()}
                 value={editLifecycle}
-                onChange={(e) => setEditLifecycle(e.target.value as typeof editLifecycle)}
+                onChange={(e) =>
+                  setEditLifecycle(e.target.value as typeof editLifecycle)
+                }
               >
-                {LIFECYCLE_OPTIONS.map((s) => (
-                  <option key={s} value={s}>{s}</option>
+                {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
                 ))}
               </select>
+              <p className="mt-1.5 text-xs text-zinc-500">
+                {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.find((o) => o.value === editLifecycle)?.description}
+              </p>
             </FilterField>
             <div className="flex items-end sm:col-span-1">
               <PrimaryButton disabled={busy} onClick={saveMetadata}>
@@ -331,12 +351,13 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
             </ul>
           )}
 
-          {auction && (
-            <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-              <p className="text-sm font-semibold text-amber-200">Auction</p>
-              {auctionLines.length > 0 ? (
+          {(normalizeAdminLifecycleStatus(discussion.lifecycle_status) === "claimable"
+            || claimWindowLines.length > 0) && (
+            <div className="mt-4 rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+              <p className="text-sm font-semibold text-violet-200">Stewardship claim window</p>
+              {claimWindowLines.length > 0 ? (
                 <dl className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {auctionLines.map((row) => (
+                  {claimWindowLines.map((row) => (
                     <div key={row.label}>
                       <dt className="text-[10px] uppercase text-zinc-500">{row.label}</dt>
                       <dd className="text-sm font-medium text-zinc-200">{row.value}</dd>
@@ -344,7 +365,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
                   ))}
                 </dl>
               ) : (
-                <p className="mt-2 text-xs text-zinc-500">Auction data present — open raw JSON in logs if needed.</p>
+                <p className="mt-2 text-xs text-zinc-500">Hub locked on gate until a steward is chosen.</p>
               )}
             </div>
           )}

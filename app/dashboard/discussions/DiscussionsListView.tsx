@@ -18,6 +18,10 @@ import {
   ReportsBadge,
   SectionCard,
 } from "./discussionUi";
+import {
+  ADMIN_DISCUSSION_LIFECYCLE_FILTER_OPTIONS,
+  normalizeLifecycleFilterParam,
+} from "@/lib/discussions/lifecycle";
 
 const PAGE_SIZE = 20;
 
@@ -29,16 +33,6 @@ const SORT_OPTIONS = [
   { value: "-live_last_go_live_at", label: "Recently live" },
   { value: "-avg_rate", label: "Highest rated" },
   { value: "title", label: "A → Z" },
-];
-
-const LIFECYCLE_FILTER_OPTIONS = [
-  { value: "", label: "Any status" },
-  { value: "bootstrap", label: "Bootstrap" },
-  { value: "active", label: "Active" },
-  { value: "grace", label: "Grace" },
-  { value: "claimable", label: "Claimable" },
-  { value: "auction", label: "Auction" },
-  { value: "expired", label: "Expired" },
 ];
 
 function CardSkeleton() {
@@ -208,7 +202,10 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     if (creatorSearch.trim()) params.set("creator", creatorSearch.trim());
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
-    if (lifecycleStatus) params.set("lifecycleStatus", lifecycleStatus);
+    if (lifecycleStatus) {
+      const normalized = normalizeLifecycleFilterParam(lifecycleStatus);
+      if (normalized) params.set("lifecycleStatus", normalized);
+    }
     if (liveOnly) params.set("liveOnly", "1");
     if (flaggedOnly) params.set("minReports", "1");
 
@@ -302,16 +299,22 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
             Live now
           </FilterChip>
           <FilterChip active={lifecycleStatus === "bootstrap"} onClick={() => applyLifecycleQuick("bootstrap")} tone="violet">
-            Bootstrap
+            Starting up
           </FilterChip>
           <FilterChip active={lifecycleStatus === "active"} onClick={() => applyLifecycleQuick("active")} tone="emerald">
-            Active
+            Live
           </FilterChip>
           <FilterChip active={lifecycleStatus === "grace"} onClick={() => applyLifecycleQuick("grace")}>
-            Grace
+            At risk
           </FilterChip>
-          <FilterChip active={lifecycleStatus === "auction"} onClick={() => applyLifecycleQuick("auction")} tone="rose">
-            Auction
+          <FilterChip
+            active={lifecycleStatus === "claimable" || lifecycleStatus === "auction"}
+            onClick={() => applyLifecycleQuick("claimable")}
+          >
+            Claimable
+          </FilterChip>
+          <FilterChip active={lifecycleStatus === "expired"} onClick={() => applyLifecycleQuick("expired")}>
+            Ended
           </FilterChip>
           {hasActiveFilters && (
             <FilterChip active={false} onClick={clearFilters}>
@@ -360,7 +363,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
                 value={lifecycleStatus}
                 onChange={(e) => { setLifecycleStatus(e.target.value); setPage(1); }}
               >
-                {LIFECYCLE_FILTER_OPTIONS.map((o) => (
+                {ADMIN_DISCUSSION_LIFECYCLE_FILTER_OPTIONS.map((o) => (
                   <option key={o.value || "all"} value={o.value}>{o.label}</option>
                 ))}
               </select>

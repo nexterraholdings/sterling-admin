@@ -9,41 +9,162 @@ import {
   setCommunityIsPlus,
 } from "@/app/dashboard/communities/actions";
 import type { Community } from "@/lib/communities/types";
+import type { BillingListResponse, BillingMetrics, BillingSubscriberRow } from "@/lib/billing/types";
 import { EmptyState, SectionCard } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-// Mirrors Sterling/src/lib/business/sterlingShopContent.ts (STERLING_PLUS_PLAN /
-// STERLING_PREMIUM_PLAN). Not billing-backed — keep in sync by hand if pricing changes.
+import {
+  formatMembershipUsd,
+  sterlingMembershipMonthlyPriceUsd,
+} from '@/lib/billing/sterlingMembershipPricing';
+
+// Mirrors Sterling/src/lib/business/sterlingMembershipPricing.ts (STERLING_MEMBERSHIP_USD).
 const REFERENCE_PLANS = [
   {
-    id: "sterling_plus",
-    name: "Sterling Plus",
-    tagline: "More room on the map for everyday members",
-    priceLabel: "$9.99",
-    priceHint: "per month",
+    id: 'sterling_plus',
+    name: 'Sterling Plus',
+    tagline: 'More room on the map for everyday members',
+    priceLabel: formatMembershipUsd(sterlingMembershipMonthlyPriceUsd('sterling_plus')),
+    priceHint: 'per month',
     features: [
-      "Free mobile icons",
-      "Recover streaks free, 2× per week",
-      "2 extra hubs each month",
-      "5 extra events each month",
+      'Free mobile icons',
+      'Recover streaks free, 2× per week',
+      'Up to 4 map hubs per month',
+      'Up to 6 map events per month',
     ],
   },
   {
-    id: "sterling_premium",
-    name: "Sterling Premium",
-    tagline: "For brokerages, teams, and local businesses",
-    priceLabel: "$49",
-    priceHint: "per month",
+    id: 'sterling_premium',
+    name: 'Sterling Premium',
+    tagline: 'For brokerages, teams, and local businesses',
+    priceLabel: formatMembershipUsd(sterlingMembershipMonthlyPriceUsd('sterling_premium')),
+    priceHint: 'per month',
     features: [
-      "Create a business community (brokerage)",
-      "Add deals and property listings",
-      "Collect leads from interested buyers",
-      "Advanced listing analytics",
+      'Unlimited map hubs & events',
+      'Unlimited business communities (brokerage)',
+      'Deals & property listings',
+      'Buyer leads & advanced listing analytics',
     ],
   },
 ];
+
+function formatPlanLabel(plan: string): string {
+  if (plan === "sterling_plus") return "Sterling Plus";
+  if (plan === "sterling_premium") return "Sterling Premium";
+  return "Free";
+}
+
+function BillingMetricsPanel({ metrics }: { metrics: BillingMetrics | null }) {
+  if (!metrics) return null;
+  const cards = [
+    { label: "Active Plus", value: metrics.active_plus },
+    { label: "Active Premium", value: metrics.active_premium },
+    { label: "Active total", value: metrics.active_total },
+    { label: "Sandbox active", value: metrics.sandbox_active },
+    { label: "Purchases (30d)", value: metrics.purchase_events_last_30_days },
+    { label: "Webhooks (30d)", value: metrics.webhook_events_last_30_days },
+    {
+      label: "Est. MRR",
+      value: `$${metrics.estimated_mrr_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+    },
+  ];
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {cards.map((c) => (
+        <div key={c.label} className="rounded-xl border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{c.label}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-50">{c.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BillingSubscribersPanel() {
+  const [rows, setRows] = useState<BillingSubscriberRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (query: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ mode: "list", pageSize: "25" });
+      if (query.trim()) params.set("search", query.trim());
+      const res = await fetch(`/api/admin/billing?${params.toString()}`);
+      const body = (await res.json()) as BillingListResponse & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Failed to load subscribers");
+      setRows(body.subscribers ?? []);
+      setTotal(body.total ?? 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load subscribers");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => void load(search), 300);
+    return () => clearTimeout(t);
+  }, [search, load]);
+
+  return (
+    <SectionCard
+      title="Billing subscribers"
+      description="Synced from RevenueCat webhooks and post-purchase sync. Quotas and streak perks use this data."
+    >
+      <Input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search username, email, or user id…"
+        autoComplete="off"
+      />
+      {error ? (
+        <div className="mt-3 rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{error}</div>
+      ) : loading ? (
+        <p className="mt-3 text-xs text-zinc-500">Loading…</p>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          title="No billing rows yet"
+          hint="Run a sandbox purchase or configure the RevenueCat webhook to populate user_sterling_billing."
+        />
+      ) : (
+        <>
+          <p className="mt-3 text-xs text-zinc-500">{total} subscriber record{total === 1 ? "" : "s"}</p>
+          <div className="mt-3 space-y-2">
+            {rows.map((row) => (
+              <div
+                key={row.user_id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-zinc-100">
+                    {row.full_name ?? row.username ?? row.email ?? row.user_id}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {formatPlanLabel(row.plan)} · {row.status}
+                    {row.is_sandbox ? " · sandbox" : ""}
+                    {row.store ? ` · ${row.store}` : ""}
+                  </p>
+                </div>
+                <div className="text-right text-xs text-zinc-500">
+                  {row.expires_at ? `Expires ${new Date(row.expires_at).toLocaleDateString()}` : "No expiry"}
+                  <br />
+                  Updated {new Date(row.updated_at).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </SectionCard>
+  );
+}
 
 function PlanReferenceCard({ plan }: { plan: (typeof REFERENCE_PLANS)[number] }) {
   return (
@@ -141,6 +262,7 @@ function GrantPlusPanel({ onGranted }: { onGranted: () => void }) {
 
 export function PlansView() {
   const [communities, setCommunities] = useState<Community[]>([]);
+  const [metrics, setMetrics] = useState<BillingMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -148,9 +270,19 @@ export function PlansView() {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetchPlusCommunities()
-      .then(setCommunities)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load Plus communities"))
+    Promise.all([
+      fetchPlusCommunities(),
+      fetch("/api/admin/billing?mode=metrics").then(async (res) => {
+        const body = (await res.json()) as BillingMetrics & { error?: string };
+        if (!res.ok) throw new Error(body.error ?? "Failed to load billing metrics");
+        return body;
+      }),
+    ])
+      .then(([plusCommunities, billingMetrics]) => {
+        setCommunities(plusCommunities);
+        setMetrics(billingMetrics);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load plans data"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -175,8 +307,23 @@ export function PlansView() {
   return (
     <div className="space-y-6">
       <SectionCard
+        title="Live billing"
+        description="Counts from Supabase user_sterling_billing (RevenueCat webhook + client sync). MRR is a rough list-price estimate."
+      >
+        {error ? (
+          <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{error}</div>
+        ) : loading ? (
+          <p className="text-xs text-zinc-500">Loading metrics…</p>
+        ) : (
+          <BillingMetricsPanel metrics={metrics} />
+        )}
+      </SectionCard>
+
+      <BillingSubscribersPanel />
+
+      <SectionCard
         title="Reference plans"
-        description="Display copy only — not billed. There is no Stripe/StoreKit/Play integration yet; these are the plans shown to users in the mobile app shop."
+        description="Display copy shown in the mobile shop. Store products must match RevenueCat package ids in sterlingShopContent / revenueCatCatalog."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           {REFERENCE_PLANS.map((plan) => (

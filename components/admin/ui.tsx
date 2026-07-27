@@ -2,24 +2,27 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
+import {
+  ADMIN_DISCUSSION_LIFECYCLE_OPTIONS,
+  lifecyclePillKey,
+  normalizeDiscussionLifecycleStatus,
+} from "@/lib/discussions/lifecycle";
 
 export const LIFECYCLE_BADGE: Record<string, string> = {
   bootstrap: "bg-violet-500/15 text-violet-300 ring-violet-500/25",
   active: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/25",
   grace: "bg-amber-500/15 text-amber-300 ring-amber-500/25",
   claimable: "bg-blue-500/15 text-blue-300 ring-blue-500/25",
-  auction: "bg-rose-500/15 text-rose-300 ring-rose-500/25",
   expired: "bg-zinc-800 text-zinc-500 ring-zinc-700",
 };
 
-export const LIFECYCLE_LABEL: Record<string, string> = {
-  bootstrap: "Bootstrap",
-  active: "Active",
-  grace: "Grace period",
-  claimable: "Claimable",
-  auction: "Auction",
-  expired: "Expired",
-};
+export const LIFECYCLE_LABEL: Record<string, string> = Object.fromEntries(
+  ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((o) => [o.value, o.label]),
+) as Record<string, string>;
+
+/** @deprecated Legacy rows; displayed as Claimable */
+LIFECYCLE_LABEL.auction = "Claimable";
+LIFECYCLE_BADGE.auction = LIFECYCLE_BADGE.claimable;
 
 type PersonLike = { full_name: string | null; username: string | null } | null | undefined;
 
@@ -60,13 +63,14 @@ export function Avatar({ id, person, size = "md" }: { id: string; person: Person
 }
 
 export function LifecyclePill({ status }: { status: string }) {
+  const key = lifecyclePillKey(status);
   return (
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ${
-        LIFECYCLE_BADGE[status] ?? "bg-zinc-800 text-zinc-400 ring-zinc-700"
+        LIFECYCLE_BADGE[key] ?? "bg-zinc-800 text-zinc-400 ring-zinc-700"
       }`}
     >
-      {LIFECYCLE_LABEL[status] ?? status.replace(/_/g, " ")}
+      {LIFECYCLE_LABEL[key] ?? normalizeDiscussionLifecycleStatus(status).replace(/_/g, " ")}
     </span>
   );
 }

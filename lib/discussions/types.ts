@@ -38,6 +38,8 @@ export type DiscussionRow = {
   last_check_in_at: string | null;
   check_in_due_at: string | null;
   grace_expires_at: string | null;
+  claim_window_opens_at: string | null;
+  claim_window_closes_at: string | null;
   live_started_at: string | null;
   live_expires_at: string | null;
   live_last_go_live_at: string | null;

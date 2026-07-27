@@ -2,17 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import type { DiscussionLifecycleStatus, DiscussionListItem } from "@/lib/discussions/types";
+import {
+  ADMIN_DISCUSSION_LIFECYCLE_STATUSES,
+  isAdminDiscussionLifecycleStatus,
+  normalizeLifecycleFilterParam,
+} from "@/lib/discussions/lifecycle";
 
 export type { DiscussionLifecycleStatus, DiscussionRow, ProfileStub } from "@/lib/discussions/types";
 export type { DiscussionListItem };
 
 const LIFECYCLE_STATUSES = new Set<DiscussionLifecycleStatus>([
-  "bootstrap",
-  "active",
-  "grace",
-  "claimable",
+  ...ADMIN_DISCUSSION_LIFECYCLE_STATUSES,
   "auction",
-  "expired",
 ]);
 
 export async function GET(req: NextRequest) {
@@ -26,7 +27,8 @@ export async function GET(req: NextRequest) {
   const dateFrom = searchParams.get("dateFrom") || null;
   const dateTo = searchParams.get("dateTo") || null;
   const minReports = Number(searchParams.get("minReports") ?? "0") || 0;
-  const lifecycleStatus = searchParams.get("lifecycleStatus")?.trim() || null;
+  const lifecycleStatusRaw = searchParams.get("lifecycleStatus")?.trim() || null;
+  const lifecycleStatus = normalizeLifecycleFilterParam(lifecycleStatusRaw);
   const liveOnly = searchParams.get("liveOnly") === "1";
   const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
   const pageSize = Math.min(100, Math.max(1, Number(searchParams.get("pageSize") ?? "20") || 20));

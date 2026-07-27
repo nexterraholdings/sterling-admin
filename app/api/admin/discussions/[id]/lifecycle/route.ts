@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
+import { isAdminDiscussionLifecycleStatus } from "@/lib/discussions/lifecycle";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -33,6 +34,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   }
   if (!body.status) {
     return NextResponse.json({ error: "status is required" }, { status: 400 });
+  }
+  if (!isAdminDiscussionLifecycleStatus(body.status)) {
+    return NextResponse.json(
+      { error: "Invalid lifecycle status. Use bootstrap, active, grace, claimable, or expired." },
+      { status: 400 },
+    );
   }
 
   try {

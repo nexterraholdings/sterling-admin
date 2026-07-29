@@ -35,9 +35,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!body.status) {
     return NextResponse.json({ error: "status is required" }, { status: 400 });
   }
+  if (body.status === "bootstrap") {
+    return NextResponse.json(
+      { error: "Starting up (bootstrap) cannot be set from admin. It only applies when a hub is created." },
+      { status: 400 },
+    );
+  }
   if (!isAdminDiscussionLifecycleStatus(body.status)) {
     return NextResponse.json(
-      { error: "Invalid lifecycle status. Use bootstrap, active, grace, claimable, or expired." },
+      { error: "Invalid lifecycle status. Use active, grace, claimable, or expired." },
       { status: 400 },
     );
   }

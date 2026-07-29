@@ -6,7 +6,9 @@ import type { DetailResponse } from "./discussionDetailTypes";
 import { formatDiscussionDate, formatLiveDuration, profileLabel } from "./discussionDetailTypes";
 import {
   ADMIN_DISCUSSION_LIFECYCLE_OPTIONS,
+  DISCUSSION_LIFECYCLE_LABELS,
   normalizeAdminLifecycleStatus,
+  normalizeDiscussionLifecycleStatus,
 } from "@/lib/discussions/lifecycle";
 import {
   DetailAccordion,
@@ -39,6 +41,8 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
 
   const [editTitle, setEditTitle] = useState(discussion.title);
   const [editDescription, setEditDescription] = useState(discussion.description ?? "");
+  const lifecyclePhase = normalizeDiscussionLifecycleStatus(discussion.lifecycle_status);
+  const isBootstrapPhase = lifecyclePhase === "bootstrap";
   const [editLifecycle, setEditLifecycle] = useState(() =>
     normalizeAdminLifecycleStatus(discussion.lifecycle_status),
   );
@@ -114,7 +118,10 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
-      if (editLifecycle !== normalizeAdminLifecycleStatus(discussion.lifecycle_status)) {
+      if (
+        !isBootstrapPhase
+        && editLifecycle !== normalizeAdminLifecycleStatus(discussion.lifecycle_status)
+      ) {
         const life = await fetch(`/api/admin/discussions/${id}/lifecycle`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -253,22 +260,35 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
               <input {...filterInputProps()} value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={60} />
             </FilterField>
             <FilterField label="Lifecycle">
-              <select
-                {...filterInputProps()}
-                value={editLifecycle}
-                onChange={(e) =>
-                  setEditLifecycle(e.target.value as typeof editLifecycle)
-                }
-              >
-                {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1.5 text-xs text-zinc-500">
-                {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.find((o) => o.value === editLifecycle)?.description}
-              </p>
+              {isBootstrapPhase ? (
+                <>
+                  <p className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-200">
+                    {DISCUSSION_LIFECYCLE_LABELS.bootstrap}
+                  </p>
+                  <p className="mt-1.5 text-xs text-zinc-500">
+                    Creation phase — only set when someone creates a hub. Admins cannot move a hub back into this state.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <select
+                    {...filterInputProps()}
+                    value={editLifecycle}
+                    onChange={(e) =>
+                      setEditLifecycle(e.target.value as typeof editLifecycle)
+                    }
+                  >
+                    {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-xs text-zinc-500">
+                    {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.find((o) => o.value === editLifecycle)?.description}
+                  </p>
+                </>
+              )}
             </FilterField>
             <div className="flex items-end sm:col-span-1">
               <PrimaryButton disabled={busy} onClick={saveMetadata}>

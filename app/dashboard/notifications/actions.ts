@@ -9,6 +9,7 @@ import {
   type NotificationRouteContext,
 } from "@/lib/notifications/definitionTypes";
 import type { NotificationTapDestination } from "@/lib/notifications/tapDestinations";
+import { sterlingBroadcastPushExtras } from "@/lib/notifications/pushBranding";
 
 const expo = new Expo();
 
@@ -109,6 +110,7 @@ async function sendPushBroadcast(message: string): Promise<PushOutcome> {
     title: PUSH_TITLE,
     body: plainBody,
     sound: "default",
+    ...sterlingBroadcastPushExtras(),
   }));
 
   let sent = 0;

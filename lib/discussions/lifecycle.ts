@@ -1,8 +1,7 @@
 import type { DiscussionLifecycleStatus } from "./types";
 
-/** Values admins may set via dashboard (auction merged into claimable). */
+/** Lifecycle values admins may assign from the dashboard (auction merged into claimable). */
 export const ADMIN_DISCUSSION_LIFECYCLE_STATUSES = [
-  "bootstrap",
   "active",
   "grace",
   "claimable",
@@ -11,12 +10,20 @@ export const ADMIN_DISCUSSION_LIFECYCLE_STATUSES = [
 
 export type AdminDiscussionLifecycleStatus = (typeof ADMIN_DISCUSSION_LIFECYCLE_STATUSES)[number];
 
+export const DISCUSSION_LIFECYCLE_LABELS: Record<DiscussionLifecycleStatus, string> = {
+  bootstrap: "Starting up",
+  active: "Live",
+  grace: "At risk",
+  claimable: "Claimable",
+  auction: "Claimable",
+  expired: "Ended",
+};
+
 export const ADMIN_DISCUSSION_LIFECYCLE_OPTIONS: {
   value: AdminDiscussionLifecycleStatus;
   label: string;
   description: string;
 }[] = [
-  { value: "bootstrap", label: "Starting up", description: "Needs enough participants before going live" },
   { value: "active", label: "Live", description: "Steward check-in rhythm" },
   { value: "grace", label: "At risk", description: "Steward missed check-in; short grace window" },
   {
@@ -29,6 +36,7 @@ export const ADMIN_DISCUSSION_LIFECYCLE_OPTIONS: {
 
 export const ADMIN_DISCUSSION_LIFECYCLE_FILTER_OPTIONS = [
   { value: "", label: "Any status" },
+  { value: "bootstrap", label: DISCUSSION_LIFECYCLE_LABELS.bootstrap },
   ...ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map(({ value, label }) => ({ value, label })),
 ];
 

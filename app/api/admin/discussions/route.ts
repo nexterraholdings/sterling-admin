@@ -13,6 +13,7 @@ export type { DiscussionListItem };
 
 const LIFECYCLE_STATUSES = new Set<DiscussionLifecycleStatus>([
   ...ADMIN_DISCUSSION_LIFECYCLE_STATUSES,
+  "bootstrap",
   "auction",
 ]);
 

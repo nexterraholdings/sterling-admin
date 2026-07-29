@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import {
-  ADMIN_DISCUSSION_LIFECYCLE_OPTIONS,
+  DISCUSSION_LIFECYCLE_LABELS,
   lifecyclePillKey,
   normalizeDiscussionLifecycleStatus,
 } from "@/lib/discussions/lifecycle";
@@ -16,9 +16,7 @@ export const LIFECYCLE_BADGE: Record<string, string> = {
   expired: "bg-zinc-800 text-zinc-500 ring-zinc-700",
 };
 
-export const LIFECYCLE_LABEL: Record<string, string> = Object.fromEntries(
-  ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((o) => [o.value, o.label]),
-) as Record<string, string>;
+export const LIFECYCLE_LABEL: Record<string, string> = { ...DISCUSSION_LIFECYCLE_LABELS };
 
 /** @deprecated Legacy rows; displayed as Claimable */
 LIFECYCLE_LABEL.auction = "Claimable";

@@ -9,8 +9,8 @@ export default function PlansPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Command</p>
           <h1 className="mt-2 text-2xl font-semibold text-zinc-50 sm:text-3xl">Plans</h1>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
-            RevenueCat subscriptions sync into Supabase for quotas and admin reporting. Manual Plus grants
-            below remain for out-of-band brokerages until Premium billing ties to communities automatically.
+            Live RevenueCat data, webhook audit, comp grants, and subscriber search. Manual community Plus grants
+            remain for brokerages that pay outside the app until Premium auto-links to communities.
           </p>
         </div>
       </div>

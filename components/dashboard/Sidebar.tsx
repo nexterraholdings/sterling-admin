@@ -21,7 +21,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { href: "/dashboard/analytics", label: "Analytics", short: "AN", description: "Growth and quality trends" },
       { href: "/dashboard/audit-logs", label: "Audit Logs", short: "AL", description: "Admin activity history" },
       { href: "/dashboard/news", label: "News", short: "NW", description: "Manage the daily news override" },
-      { href: "/dashboard/plans", label: "Plans", short: "PL", description: "Manual plus/premium overrides" },
+      { href: "/dashboard/plans", label: "Plans", short: "PL", description: "Billing, comps, and brokerage Plus" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app broadcast messages" },
     ],
   },

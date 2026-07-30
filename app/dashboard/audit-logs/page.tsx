@@ -21,6 +21,12 @@ const ACTION_LABELS: Record<string, string> = {
   auto_hide_post: "Post auto-hidden (mass-reported)",
   auto_suspend_user: "User auto-suspended (mass-reported)",
   restore_post: "Auto-hidden post restored",
+  login_success: "Admin sign-in succeeded",
+  login_failed: "Admin sign-in failed",
+  login_rate_limited: "Admin sign-in rate limited",
+  logout: "Admin signed out",
+  mfa_enrolled: "Admin MFA enrolled",
+  mfa_verified: "Admin MFA verified",
 };
 
 function actionLabel(action: string): string {

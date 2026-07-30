@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
-import type { BillingListResponse, BillingMetrics, BillingPlanId, BillingStatus } from "@/lib/billing/types";
+import type {
+  BillingEventsResponse,
+  BillingListResponse,
+  BillingMetrics,
+  BillingPlanId,
+  BillingStatus,
+} from "@/lib/billing/types";
 
 const PLANS = new Set<BillingPlanId>(["free", "sterling_plus", "sterling_premium"]);
 const STATUSES = new Set<BillingStatus>(["active", "grace_period", "cancelled", "expired", "inactive"]);
@@ -19,6 +25,38 @@ export async function GET(req: NextRequest) {
       return NextResponse.json((data ?? {}) as BillingMetrics);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to load billing metrics";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
+  if (mode === "events") {
+    const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(searchParams.get("pageSize") ?? "20") || 20));
+    const offset = (page - 1) * pageSize;
+
+    try {
+      const { count, error: countError } = await supabaseAdmin
+        .from("billing_revenuecat_events")
+        .select("*", { count: "exact", head: true });
+      if (countError) throw new Error(countError.message);
+
+      const { data, error } = await supabaseAdmin
+        .from("billing_revenuecat_events")
+        .select(
+          "id,rc_event_id,event_type,app_user_id,product_id,store,environment,received_at,apply_error",
+        )
+        .order("received_at", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+
+      return NextResponse.json({
+        events: data ?? [],
+        total: count ?? 0,
+        page,
+        pageSize,
+      } satisfies BillingEventsResponse);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to load webhook events";
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }

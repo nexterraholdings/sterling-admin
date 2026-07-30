@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { MFA_REQUIRED_PATH } from "@/lib/auth/constants";
+import { getStaffMfaState } from "@/lib/auth/mfa";
 
 export const STAFF_ROLES = ["owner", "admin", "moderator"] as const;
 export type StaffRole = (typeof STAFF_ROLES)[number];
@@ -46,6 +48,11 @@ export async function getCurrentAdmin(): Promise<CurrentAdmin> {
 
   if (!isStaffRole(profile?.account_role)) {
     redirect("/");
+  }
+
+  const mfaState = await getStaffMfaState(supabase);
+  if (mfaState.status !== "ok") {
+    redirect(MFA_REQUIRED_PATH);
   }
 
   return {

@@ -40,3 +40,22 @@ export type BillingListResponse = {
   page: number;
   pageSize: number;
 };
+
+export type BillingEventRow = {
+  id: string;
+  rc_event_id: string;
+  event_type: string;
+  app_user_id: string | null;
+  product_id: string | null;
+  store: string | null;
+  environment: string | null;
+  received_at: string;
+  apply_error: string | null;
+};
+
+export type BillingEventsResponse = {
+  events: BillingEventRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+};

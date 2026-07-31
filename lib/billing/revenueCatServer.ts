@@ -15,13 +15,21 @@ export type RevenueCatSubscriberResponse = {
       string,
       {
         expires_date?: string | null;
-        store?: string;
+        store?: string | null;
         period_type?: string;
         unsubscribe_detected_at?: string | null;
         billing_issues_detected_at?: string | null;
       }
     >;
+    non_subscriptions?: Record<string, RevenueCatNonSubscriptionPurchase[]>;
   };
+};
+
+type RevenueCatNonSubscriptionPurchase = {
+  id?: string;
+  store_transaction_id?: string;
+  purchase_date?: string;
+  is_sandbox?: boolean;
 };
 
 function planFromEntitlementIds(entitlementIds: string[] | null | undefined): BillingPlanId {
@@ -126,13 +134,6 @@ export async function applySubscriptionFromSubscriber(
 }
 
 const REVENUECAT_V2_BASE = "https://api.revenuecat.com";
-
-type RevenueCatNonSubscriptionPurchase = {
-  id?: string;
-  store_transaction_id?: string;
-  purchase_date?: string;
-  is_sandbox?: boolean;
-};
 
 type RevenueCatV2List<T> = {
   items?: T[];
@@ -275,7 +276,7 @@ async function fetchRevenueCatV2AllItems<T>(initialPath: string, secretKey: stri
   let nextPath: string | null = initialPath;
 
   while (nextPath) {
-    const page = await revenueCatV2Get<RevenueCatV2List<T>>(nextPath, secretKey);
+    const page: RevenueCatV2List<T> = await revenueCatV2Get<RevenueCatV2List<T>>(nextPath, secretKey);
     items.push(...(page.items ?? []));
     nextPath = page.next_page ?? null;
   }

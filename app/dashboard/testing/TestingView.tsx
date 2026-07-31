@@ -136,8 +136,9 @@ export function TestingView() {
         <div className="mb-5 flex items-start gap-2.5 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3">
           <span className="mt-0.5 shrink-0 text-sky-300">🧪</span>
           <p className="text-sm leading-6 text-sky-200">
-            QA utilities against production Supabase. Streak simulation writes real <code className="text-sky-100">user_visits</code> rows
-            and profile counters for the selected account.
+            QA utilities against production Supabase. Streak simulation writes{" "}
+            <code className="text-sky-100">user_app_streaks</code>,{" "}
+            <code className="text-sky-100">user_app_visit_days</code>, and profile counters for the selected account.
           </p>
         </div>
 

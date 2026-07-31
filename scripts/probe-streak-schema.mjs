@@ -46,6 +46,15 @@ checks.push(["profiles streak columns", profileProbe.error?.message ?? "ok"]);
 const visitsProbe = await admin.from("user_visits").select("user_id,visit_date").limit(1);
 checks.push(["user_visits table", visitsProbe.error?.message ?? "ok"]);
 
+const appStreakProbe = await admin
+  .from("user_app_streaks")
+  .select("user_id,streak_current,last_broken_streak,visit_dates")
+  .limit(1);
+checks.push(["user_app_streaks table", appStreakProbe.error?.message ?? "ok"]);
+
+const visitDaysProbe = await admin.from("user_app_visit_days").select("user_id,visit_date").limit(1);
+checks.push(["user_app_visit_days table", visitDaysProbe.error?.message ?? "ok"]);
+
 for (const [name, result] of checks) {
   console.log(`${name}: ${result}`);
 }

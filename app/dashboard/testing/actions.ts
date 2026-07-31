@@ -7,7 +7,7 @@ import {
   assertValidUserId,
   addUtcDays,
   buildMissedYesterdayVisitDates,
-  computeStreakRestorePreview,
+  computeServerStreakRestorePreview,
   utcDayKey,
 } from "@/lib/testing/streakSimulation";
 
@@ -41,6 +41,10 @@ function escapeIlikeTerm(term: string): string {
   return term.replace(/[\\%,.():]/g, (c) => `\\${c}`);
 }
 
+function normalizeVisitDates(rows: { visit_date: unknown }[] | null | undefined): string[] {
+  return (rows ?? []).map((row) => String(row.visit_date).slice(0, 10));
+}
+
 export async function searchUsers(query: string): Promise<UserSearchResult[]> {
   await getCurrentAdmin();
   requireServiceRole();
@@ -70,14 +74,23 @@ export async function fetchUserStreakSnapshot(userId: string): Promise<UserStrea
   requireServiceRole();
   assertValidUserId(userId);
 
-  const [{ data: profile, error: profileErr }, { data: visits, error: visitsErr }] = await Promise.all([
+  const [
+    { data: profile, error: profileErr },
+    { data: appStreak, error: appStreakErr },
+    { data: visitDays, error: visitDaysErr },
+  ] = await Promise.all([
     supabaseAdmin
       .from("profiles")
       .select("streak_current,streak_longest,last_visit_date")
       .eq("id", userId)
       .maybeSingle(),
     supabaseAdmin
-      .from("user_visits")
+      .from("user_app_streaks")
+      .select("streak_current,streak_longest,last_visit_date,last_broken_streak,visit_dates")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("user_app_visit_days")
       .select("visit_date")
       .eq("user_id", userId)
       .order("visit_date", { ascending: false })
@@ -85,20 +98,37 @@ export async function fetchUserStreakSnapshot(userId: string): Promise<UserStrea
   ]);
 
   if (profileErr) throw new Error(profileErr.message);
-  if (visitsErr) throw new Error(visitsErr.message);
+  if (appStreakErr) throw new Error(appStreakErr.message);
+  if (visitDaysErr) throw new Error(visitDaysErr.message);
   if (!profile) throw new Error("User not found");
 
-  const visitDates = ((visits ?? []) as { visit_date: string }[]).map((row) =>
-    String(row.visit_date).slice(0, 10),
+  const visitDatesFromDays = normalizeVisitDates(visitDays);
+  const visitDatesFromStreak = Array.isArray(appStreak?.visit_dates)
+    ? appStreak.visit_dates.map((d: unknown) => String(d).slice(0, 10))
+    : [];
+  const visitDates = visitDatesFromDays.length > 0 ? visitDatesFromDays : visitDatesFromStreak;
+
+  const streakCurrent = Number(appStreak?.streak_current ?? profile.streak_current ?? 0);
+  const streakLongest = Math.max(
+    Number(profile.streak_longest ?? 0),
+    Number(appStreak?.streak_longest ?? 0),
   );
-  const streakCurrent = Number(profile.streak_current ?? 0);
-  const restore = computeStreakRestorePreview(visitDates, streakCurrent);
+  const lastVisitDate = (appStreak?.last_visit_date ?? profile.last_visit_date)
+    ? String(appStreak?.last_visit_date ?? profile.last_visit_date).slice(0, 10)
+    : null;
+
+  const restore = computeServerStreakRestorePreview({
+    streakCurrent,
+    lastVisitDate,
+    lastBrokenStreak: Number(appStreak?.last_broken_streak ?? 0),
+    visitDates,
+  });
 
   return {
     userId,
     streakCurrent,
-    streakLongest: Number(profile.streak_longest ?? 0),
-    lastVisitDate: profile.last_visit_date ? String(profile.last_visit_date).slice(0, 10) : null,
+    streakLongest,
+    lastVisitDate,
     visitDates,
     restoreEligible: restore.eligible,
     brokenStreak: restore.brokenStreak,
@@ -126,25 +156,62 @@ export async function simulateMissedStreakYesterday(params: {
   if (profileErr) throw new Error(profileErr.message);
   if (!profile) throw new Error("User not found");
 
+  const { data: existingStreak } = await supabaseAdmin
+    .from("user_app_streaks")
+    .select("streak_longest")
+    .eq("user_id", params.targetUserId)
+    .maybeSingle();
+
   const today = utcDayKey();
   const yesterday = addUtcDays(today, -1);
   const visitDates = buildMissedYesterdayVisitDates(priorStreakDays);
+  const nextLongest = Math.max(
+    Number(profile.streak_longest ?? 0),
+    Number(existingStreak?.streak_longest ?? 0),
+    priorStreakDays + 1,
+  );
 
-  const { error: deleteErr } = await supabaseAdmin
+  const { error: deleteVisitDaysErr } = await supabaseAdmin
+    .from("user_app_visit_days")
+    .delete()
+    .eq("user_id", params.targetUserId);
+  if (deleteVisitDaysErr) throw new Error(deleteVisitDaysErr.message);
+
+  const { error: deleteVisitsErr } = await supabaseAdmin
     .from("user_visits")
     .delete()
     .eq("user_id", params.targetUserId);
-  if (deleteErr) throw new Error(deleteErr.message);
+  if (deleteVisitsErr) throw new Error(deleteVisitsErr.message);
 
-  const { error: insertErr } = await supabaseAdmin.from("user_visits").insert(
+  const { error: insertVisitDaysErr } = await supabaseAdmin.from("user_app_visit_days").insert(
     visitDates.map((visit_date) => ({
       user_id: params.targetUserId,
       visit_date,
     })),
   );
-  if (insertErr) throw new Error(insertErr.message);
+  if (insertVisitDaysErr) throw new Error(insertVisitDaysErr.message);
 
-  const nextLongest = Math.max(Number(profile.streak_longest ?? 0), priorStreakDays + 1);
+  const { error: insertVisitsErr } = await supabaseAdmin.from("user_visits").insert(
+    visitDates.map((visit_date) => ({
+      user_id: params.targetUserId,
+      visit_date,
+    })),
+  );
+  if (insertVisitsErr) throw new Error(insertVisitsErr.message);
+
+  const { error: upsertStreakErr } = await supabaseAdmin.from("user_app_streaks").upsert(
+    {
+      user_id: params.targetUserId,
+      streak_current: 1,
+      streak_longest: nextLongest,
+      last_visit_date: today,
+      last_broken_streak: priorStreakDays,
+      visit_dates: visitDates,
+    },
+    { onConflict: "user_id" },
+  );
+  if (upsertStreakErr) throw new Error(upsertStreakErr.message);
+
   const { error: updateErr } = await supabaseAdmin
     .from("profiles")
     .update({
@@ -159,7 +226,7 @@ export async function simulateMissedStreakYesterday(params: {
 
   if (!snapshot.restoreEligible || snapshot.brokenStreak !== priorStreakDays) {
     throw new Error(
-      `Simulation wrote data but restore preview failed (eligible=${snapshot.restoreEligible}, broken=${snapshot.brokenStreak}, expected=${priorStreakDays}). Check user_visits schema.`,
+      `Simulation wrote data but restore preview failed (eligible=${snapshot.restoreEligible}, broken=${snapshot.brokenStreak}, expected=${priorStreakDays}). Check user_app_streaks / user_app_visit_days.`,
     );
   }
 

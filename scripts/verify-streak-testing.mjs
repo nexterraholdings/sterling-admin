@@ -52,6 +52,22 @@ function computeStreakRestorePreview(visitDates, streakCurrent, referenceDate = 
   return { eligible: true, brokenStreak };
 }
 
+function computeServerStreakRestorePreview(params) {
+  const today = utcDayKey(params.referenceDate);
+  const yesterday = addUtcDays(today, -1);
+  const visits = new Set(params.visitDates.map((d) => d.slice(0, 10)));
+  const lastVisit = params.lastVisitDate?.slice(0, 10) ?? null;
+  const brokenStreak = Math.max(0, Math.floor(params.lastBrokenStreak));
+
+  const eligible =
+    lastVisit === today
+    && params.streakCurrent === 1
+    && brokenStreak > 0
+    && !visits.has(yesterday);
+
+  return { eligible, brokenStreak: eligible ? brokenStreak : 0 };
+}
+
 const ref = new Date("2026-07-30T15:00:00.000Z");
 const today = utcDayKey(ref);
 const yesterday = addUtcDays(today, -1);
@@ -67,5 +83,15 @@ assert.equal(preview.brokenStreak, 7);
 
 const badStreak = computeStreakRestorePreview(visits, 5, ref);
 assert.equal(badStreak.eligible, false);
+
+const serverPreview = computeServerStreakRestorePreview({
+  streakCurrent: 1,
+  lastVisitDate: today,
+  lastBrokenStreak: 7,
+  visitDates: visits,
+  referenceDate: ref,
+});
+assert.equal(serverPreview.eligible, true);
+assert.equal(serverPreview.brokenStreak, 7);
 
 console.log("streak testing helpers: OK");

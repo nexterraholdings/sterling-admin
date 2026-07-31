@@ -52,6 +52,29 @@ export function computeStreakRestorePreview(
   return { eligible: true, brokenStreak };
 }
 
+/** Mirrors `get_streak_restore_status()` eligibility (user_app_streaks + user_app_visit_days). */
+export function computeServerStreakRestorePreview(params: {
+  streakCurrent: number;
+  lastVisitDate: string | null;
+  lastBrokenStreak: number;
+  visitDates: string[];
+  referenceDate?: Date;
+}): { eligible: boolean; brokenStreak: number } {
+  const today = utcDayKey(params.referenceDate);
+  const yesterday = addUtcDays(today, -1);
+  const visits = new Set(params.visitDates.map((d) => d.slice(0, 10)));
+  const lastVisit = params.lastVisitDate?.slice(0, 10) ?? null;
+  const brokenStreak = Math.max(0, Math.floor(params.lastBrokenStreak));
+
+  const eligible =
+    lastVisit === today
+    && params.streakCurrent === 1
+    && brokenStreak > 0
+    && !visits.has(yesterday);
+
+  return { eligible, brokenStreak: eligible ? brokenStreak : 0 };
+}
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

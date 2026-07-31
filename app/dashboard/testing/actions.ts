@@ -2,7 +2,7 @@
 
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { describeUser, logAdminAction } from "@/app/dashboard/lib/audit-log";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import {
   assertValidUserId,
   addUtcDays,
@@ -29,15 +29,29 @@ export type UserStreakSnapshot = {
   brokenStreak: number;
 };
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — testing helpers require service-role access."
+    );
+  }
+}
+
+function escapeIlikeTerm(term: string): string {
+  return term.replace(/[\\%,.():]/g, (c) => `\\${c}`);
+}
+
 export async function searchUsers(query: string): Promise<UserSearchResult[]> {
   await getCurrentAdmin();
+  requireServiceRole();
   const term = query.trim();
   if (!term) return [];
 
+  const escaped = escapeIlikeTerm(term);
   const { data, error } = await supabaseAdmin
     .from("profiles")
     .select("id,email,username,full_name,referral_count")
-    .or(`full_name.ilike.%${term}%,email.ilike.%${term}%,username.ilike.%${term}%`)
+    .or(`full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,username.ilike.%${escaped}%`)
     .order("full_name", { ascending: true })
     .limit(10);
   if (error) throw new Error(error.message);
@@ -53,6 +67,7 @@ export async function searchUsers(query: string): Promise<UserSearchResult[]> {
 
 export async function fetchUserStreakSnapshot(userId: string): Promise<UserStreakSnapshot> {
   await getCurrentAdmin();
+  requireServiceRole();
   assertValidUserId(userId);
 
   const [{ data: profile, error: profileErr }, { data: visits, error: visitsErr }] = await Promise.all([
@@ -99,6 +114,7 @@ export async function simulateMissedStreakYesterday(params: {
   priorStreakDays?: number;
 }): Promise<UserStreakSnapshot> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
   assertValidUserId(params.targetUserId);
   const priorStreakDays = Math.max(1, Math.min(30, Math.floor(Number(params.priorStreakDays ?? 7) || 7)));
 

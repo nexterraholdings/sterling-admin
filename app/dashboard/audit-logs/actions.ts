@@ -1,6 +1,7 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 
 export type AuditCategory = "moderation" | "admin" | "security" | "system";
 
@@ -17,11 +18,29 @@ export type AuditLogEntry = {
 
 const AUDIT_PAGE_SIZE = 20;
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — audit logs require service-role access."
+    );
+  }
+}
+
+function escapeIlikeTerm(term: string): string {
+  return term.replace(/[\\%,.():]/g, (c) => `\\${c}`);
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
+
 export async function fetchAuditLogs(
   page: number,
   category?: AuditCategory,
   search = ""
 ): Promise<{ logs: AuditLogEntry[]; totalCount: number }> {
+  await assertAdmin();
   const offset = (page - 1) * AUDIT_PAGE_SIZE;
 
   let countQuery = supabaseAdmin
@@ -40,7 +59,7 @@ export async function fetchAuditLogs(
   }
 
   if (search.trim()) {
-    const term = search.trim();
+    const term = escapeIlikeTerm(search.trim());
     const filter = `actor_label.ilike.%${term}%,detail.ilike.%${term}%,action.ilike.%${term}%,target_id.ilike.%${term}%`;
     countQuery = countQuery.or(filter);
     dataQuery = dataQuery.or(filter);
@@ -53,6 +72,7 @@ export async function fetchAuditLogs(
 }
 
 export async function fetchAuditLogCounts(): Promise<Record<AuditCategory | "all", number>> {
+  await assertAdmin();
   const categories: AuditCategory[] = ["moderation", "admin", "security", "system"];
 
   const [allRes, ...categoryRes] = await Promise.all([

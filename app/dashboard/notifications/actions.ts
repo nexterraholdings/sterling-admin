@@ -1,8 +1,8 @@
 "use server";
 
 import { Expo, type ExpoPushMessage } from "expo-server-sdk";
-import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin, type CurrentAdmin } from "@/app/dashboard/lib/dal";
 import {
   buildRouteContext,
   validateRouteFields,
@@ -12,6 +12,25 @@ import type { NotificationTapDestination } from "@/lib/notifications/tapDestinat
 import { sterlingBroadcastPushExtras } from "@/lib/notifications/pushBranding";
 
 const expo = new Expo();
+
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — notification admin requires service-role access."
+    );
+  }
+}
+
+// Mass push/inbox broadcasts reach every user on the platform -- moderators
+// are staff, but that blast radius should require owner/admin, not the
+// moderator role (which is otherwise scoped to per-post/user moderation).
+async function requireBroadcastAdmin(): Promise<CurrentAdmin> {
+  const admin = await getCurrentAdmin();
+  if (admin.accountRole !== "owner" && admin.accountRole !== "admin") {
+    throw new Error("Only owners and admins can send broadcast notifications");
+  }
+  return admin;
+}
 
 // Sent one-per-request (not batched via chunkPushNotifications) because Expo rejects
 // an entire batch if it mixes tokens registered to different Expo/FCM projects, which
@@ -94,6 +113,9 @@ async function resolveInboxUserIds(): Promise<string[]> {
 }
 
 export async function fetchAudiencePreview(): Promise<AudiencePreview> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const [pushTokens, inboxUserIds] = await Promise.all([resolvePushTokens(), resolveInboxUserIds()]);
   return { pushRecipients: pushTokens.length, inboxRecipients: inboxUserIds.length };
 }
@@ -177,7 +199,8 @@ export async function sendBroadcastNotification(params: {
   sendPush: boolean;
   addToInbox: boolean;
 }): Promise<BroadcastResult> {
-  await getCurrentAdmin();
+  await requireBroadcastAdmin();
+  requireServiceRole();
   const message = params.message.trim();
   if (!message) throw new Error("Message is required");
   if (!params.sendPush && !params.addToInbox) throw new Error("Choose at least one delivery method");
@@ -218,7 +241,8 @@ export async function sendCustomTypeBroadcast(params: {
   sendPush: boolean;
   addToInbox: boolean;
 }): Promise<CustomBroadcastResult> {
-  await getCurrentAdmin();
+  await requireBroadcastAdmin();
+  requireServiceRole();
   const title = params.title.trim();
   if (!title) throw new Error("Title is required");
   if (!params.sendPush && !params.addToInbox) throw new Error("Choose at least one delivery method");
@@ -358,6 +382,9 @@ function rowToTemplate(row: { id: string; name: string; body: string; created_at
 }
 
 export async function fetchTemplates(): Promise<NotificationTemplate[]> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { data, error } = await supabaseAdmin
     .from("notification_templates")
     .select("id,name,body,created_at,updated_at")
@@ -370,6 +397,9 @@ export async function createTemplate(params: {
   name: string;
   message: string;
 }): Promise<NotificationTemplate> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const name = params.name.trim();
   const message = params.message.trim();
   if (!name || !message) throw new Error("Name and message are required");
@@ -387,6 +417,9 @@ export async function updateTemplate(
   id: string,
   params: { name: string; message: string }
 ): Promise<NotificationTemplate> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const name = params.name.trim();
   const message = params.message.trim();
   if (!name || !message) throw new Error("Name and message are required");
@@ -402,6 +435,9 @@ export async function updateTemplate(
 }
 
 export async function deleteTemplate(id: string): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { error } = await supabaseAdmin.from("notification_templates").delete().eq("id", id);
   if (error) throw new Error(error.message);
 }

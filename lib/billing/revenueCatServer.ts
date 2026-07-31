@@ -125,11 +125,138 @@ export async function applySubscriptionFromSubscriber(
   if (error) throw new Error(error.message);
 }
 
-export async function fetchRevenueCatSubscriber(
-  appUserId: string,
-  secretKey: string,
-): Promise<RevenueCatSubscriberResponse> {
-  const res = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+const REVENUECAT_V2_BASE = "https://api.revenuecat.com";
+
+type RevenueCatNonSubscriptionPurchase = {
+  id?: string;
+  store_transaction_id?: string;
+  purchase_date?: string;
+  is_sandbox?: boolean;
+};
+
+type RevenueCatV2List<T> = {
+  items?: T[];
+  next_page?: string | null;
+};
+
+type RevenueCatV2Entitlement = {
+  lookup_key?: string;
+  products?: { items?: Array<{ store_identifier?: string }> };
+};
+
+type RevenueCatV2Subscription = {
+  gives_access?: boolean;
+  current_period_ends_at?: number | null;
+  current_period_starts_at?: number | null;
+  store?: string | null;
+  environment?: string | null;
+  auto_renewal_status?: string | null;
+  status?: string | null;
+  pending_payment?: boolean | null;
+  entitlements?: { items?: RevenueCatV2Entitlement[] };
+};
+
+type RevenueCatV2Purchase = {
+  id?: string;
+  purchased_at?: number | null;
+  environment?: string | null;
+  store_purchase_identifier?: string | number | null;
+  status?: string | null;
+  entitlements?: { items?: RevenueCatV2Entitlement[] };
+};
+
+function msToIso(ms: number | null | undefined): string | null {
+  if (ms == null || !Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+function firstStoreIdentifierFromEntitlements(
+  entitlements: RevenueCatV2Entitlement[] | undefined,
+): string | null {
+  for (const ent of entitlements ?? []) {
+    for (const prod of ent.products?.items ?? []) {
+      if (prod.store_identifier) return prod.store_identifier;
+    }
+  }
+  return null;
+}
+
+function subscriptionHasBillingIssue(subscription: RevenueCatV2Subscription): boolean {
+  return (
+    subscription.pending_payment === true ||
+    subscription.status === "in_grace_period" ||
+    subscription.status === "in_billing_retry"
+  );
+}
+
+function normalizeRevenueCatV2Customer(
+  subscriptions: RevenueCatV2Subscription[],
+  purchases: RevenueCatV2Purchase[],
+): RevenueCatSubscriberResponse {
+  const entitlements: NonNullable<RevenueCatSubscriberResponse["subscriber"]>["entitlements"] = {};
+  const subs: NonNullable<RevenueCatSubscriberResponse["subscriber"]>["subscriptions"] = {};
+  const nonSubscriptions: Record<string, RevenueCatNonSubscriptionPurchase[]> = {};
+
+  for (const subscription of subscriptions) {
+    const entitlementItems = subscription.entitlements?.items ?? [];
+    const storeIdentifier = firstStoreIdentifierFromEntitlements(entitlementItems);
+    const subKey = storeIdentifier ?? `subscription_${Object.keys(subs).length}`;
+    const expiresDate = msToIso(subscription.current_period_ends_at);
+    const willNotRenew = subscription.auto_renewal_status === "will_not_renew";
+    const billingIssue = subscriptionHasBillingIssue(subscription);
+
+    subs[subKey] = {
+      expires_date: expiresDate,
+      store: subscription.store ?? null,
+      unsubscribe_detected_at: willNotRenew ? expiresDate ?? new Date().toISOString() : null,
+      billing_issues_detected_at: billingIssue ? new Date().toISOString() : null,
+    };
+
+    if (!subscription.gives_access) continue;
+
+    for (const ent of entitlementItems) {
+      const lookupKey = ent.lookup_key;
+      if (!lookupKey) continue;
+      entitlements[lookupKey] = {
+        expires_date: expiresDate,
+        product_identifier: storeIdentifier ?? undefined,
+        purchase_date: msToIso(subscription.current_period_starts_at) ?? undefined,
+      };
+    }
+  }
+
+  for (const purchase of purchases) {
+    if (purchase.status && purchase.status !== "owned") continue;
+    const storeIdentifier = firstStoreIdentifierFromEntitlements(purchase.entitlements?.items);
+    if (!storeIdentifier) continue;
+
+    const entry: RevenueCatNonSubscriptionPurchase = {
+      id: purchase.id,
+      store_transaction_id:
+        purchase.store_purchase_identifier != null
+          ? String(purchase.store_purchase_identifier)
+          : undefined,
+      purchase_date: msToIso(purchase.purchased_at) ?? undefined,
+      is_sandbox: (purchase.environment ?? "").toLowerCase() === "sandbox",
+    };
+
+    if (!nonSubscriptions[storeIdentifier]) {
+      nonSubscriptions[storeIdentifier] = [];
+    }
+    nonSubscriptions[storeIdentifier].push(entry);
+  }
+
+  return {
+    subscriber: {
+      entitlements,
+      subscriptions: subs,
+      non_subscriptions: nonSubscriptions,
+    },
+  };
+}
+
+async function revenueCatV2Get<T>(path: string, secretKey: string): Promise<T> {
+  const res = await fetch(`${REVENUECAT_V2_BASE}${path}`, {
     headers: {
       Authorization: `Bearer ${secretKey}`,
       "Content-Type": "application/json",
@@ -140,7 +267,52 @@ export async function fetchRevenueCatSubscriber(
     const text = await res.text();
     throw new Error(`RevenueCat API ${res.status}: ${text.slice(0, 240)}`);
   }
-  return (await res.json()) as RevenueCatSubscriberResponse;
+  return (await res.json()) as T;
+}
+
+async function fetchRevenueCatV2AllItems<T>(initialPath: string, secretKey: string): Promise<T[]> {
+  const items: T[] = [];
+  let nextPath: string | null = initialPath;
+
+  while (nextPath) {
+    const page = await revenueCatV2Get<RevenueCatV2List<T>>(nextPath, secretKey);
+    items.push(...(page.items ?? []));
+    nextPath = page.next_page ?? null;
+  }
+
+  return items;
+}
+
+export async function fetchRevenueCatSubscriber(
+  appUserId: string,
+  secretKey: string,
+  projectId: string,
+): Promise<RevenueCatSubscriberResponse> {
+  const customerPath =
+    `/v2/projects/${encodeURIComponent(projectId)}/customers/${encodeURIComponent(appUserId)}`;
+
+  try {
+    await revenueCatV2Get<{ id?: string }>(customerPath, secretKey);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("404")) {
+      return { subscriber: { entitlements: {}, subscriptions: {}, non_subscriptions: {} } };
+    }
+    throw err;
+  }
+
+  const [subscriptions, purchases] = await Promise.all([
+    fetchRevenueCatV2AllItems<RevenueCatV2Subscription>(
+      `${customerPath}/subscriptions?limit=100`,
+      secretKey,
+    ),
+    fetchRevenueCatV2AllItems<RevenueCatV2Purchase>(
+      `${customerPath}/purchases?limit=100`,
+      secretKey,
+    ),
+  ]);
+
+  return normalizeRevenueCatV2Customer(subscriptions, purchases);
 }
 
 export async function applyManualUserBilling(

@@ -1,6 +1,7 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
 
 export type BanType = "general" | "harassment" | "spam" | "content_violation";
@@ -27,19 +28,35 @@ export type ActiveDeviceBan = {
   created_at: string;
 };
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — ban management requires service-role access."
+    );
+  }
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
+
 export async function fetchActiveBans(): Promise<ActiveBan[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin.rpc("admin_get_active_bans");
   if (error) throw new Error(error.message);
   return data ?? [];
 }
 
 export async function fetchActiveDeviceBans(): Promise<ActiveDeviceBan[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin.rpc("admin_get_active_device_bans");
   if (error) throw new Error(error.message);
   return data ?? [];
 }
 
 export async function unbanUser(userId: string): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_unban_user", {
     p_user_id: userId,
   });
@@ -61,6 +78,7 @@ export async function banUser(params: {
   expiresAt: string | null;
   alsoBanDevices: boolean;
 }): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_ban_user", {
     p_user_id: params.userId,
     p_reason: params.reason,

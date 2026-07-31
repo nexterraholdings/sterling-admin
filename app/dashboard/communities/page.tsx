@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   fetchCommunities,
+  fetchCommunityById,
   fetchCommunityMembers,
   fetchAddressVerificationQueue,
   updateCommunity,
@@ -25,6 +26,31 @@ import { Tabs } from "@/components/dashboard/Tabs";
 import { Pagination } from "@/components/ui/Pagination";
 
 const PAGE_SIZE = 20;
+
+const VISIBILITY_LABEL: Record<string, string> = {
+  public: "Public",
+  private: "Private",
+  restricted: "Restricted",
+};
+
+const MEMBER_ROLES = ["owner", "moderator", "member", "admin"] as const;
+
+function communityToForm(community: Community) {
+  return {
+    name: community.name ?? "",
+    description: community.description ?? "",
+    category: community.category ?? "",
+    visibility: community.visibility ?? "public",
+    community_type: community.community_type ?? "standard",
+  };
+}
+
+function memberRoleOptions(currentRole: string): string[] {
+  const roles = new Set<string>(["member", "moderator"]);
+  if (currentRole === "owner") roles.add("owner");
+  if (currentRole === "admin") roles.add("admin");
+  return MEMBER_ROLES.filter((role) => roles.has(role));
+}
 
 // ---------------------------------------------------------------------------
 // Components
@@ -96,18 +122,37 @@ function EditCommunityPanel({
   onClose: () => void;
   onSaved: (updated: Community) => void;
 }) {
-  const [form, setForm] = useState({
-    name: community.name ?? "",
-    description: community.description ?? "",
-    category: community.category ?? "",
-    visibility: community.visibility ?? "public",
-    community_type: community.community_type ?? "standard",
-  });
+  const [communityState, setCommunityState] = useState(community);
+  const [form, setForm] = useState(() => communityToForm(community));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [plusBusy, setPlusBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [live, setLive] = useState(community);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setCommunityState(community);
+    setForm(communityToForm(community));
+    setLive(community);
+    setSaveError(null);
+
+    fetchCommunityById(community.id)
+      .then((fresh) => {
+        if (cancelled || !fresh) return;
+        setCommunityState(fresh);
+        setForm(communityToForm(fresh));
+        setLive(fresh);
+      })
+      .catch((e) => {
+        if (!cancelled) console.error(e);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [community.id]);
 
   function set(key: string, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -123,9 +168,9 @@ function EditCommunityPanel({
         category: form.category || null,
         visibility: form.visibility || null,
       };
-      await updateCommunity(community.id, updates);
+      await updateCommunity(communityState.id, updates);
       if (form.community_type !== live.community_type) {
-        await setCommunityType(community.id, form.community_type as CommunityType);
+        await setCommunityType(communityState.id, form.community_type as CommunityType);
       }
       const updated = { ...live, ...updates, community_type: form.community_type as CommunityType };
       setLive(updated);
@@ -143,7 +188,7 @@ function EditCommunityPanel({
       : window.prompt("Reason for revoking Plus?") ?? undefined;
     setPlusBusy(true);
     try {
-      const updated = await setCommunityIsPlus(community.id, next, reason);
+      const updated = await setCommunityIsPlus(communityState.id, next, reason);
       setLive(updated);
       onSaved(updated);
     } catch (e: any) {
@@ -156,7 +201,7 @@ function EditCommunityPanel({
   async function handleAddressReview(status: AddressVerificationStatus) {
     setReviewBusy(true);
     try {
-      const updated = await reviewCommunityAddress(community.id, status);
+      const updated = await reviewCommunityAddress(communityState.id, status);
       setLive(updated);
       onSaved(updated);
     } catch (e: any) {
@@ -178,7 +223,7 @@ function EditCommunityPanel({
           <div>
             <h2 className="text-base font-semibold text-zinc-50">Edit community</h2>
             <p className="mt-0.5 text-sm text-zinc-500">
-              {community.name ?? "Untitled"}
+              {communityState.name ?? "Untitled"}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <CommunityTypeBadge type={live.community_type} />
@@ -232,6 +277,7 @@ function EditCommunityPanel({
               >
                 <option value="public">Public</option>
                 <option value="private">Private</option>
+                <option value="restricted">Restricted</option>
               </select>
             </Field>
             <Field label="Community type">
@@ -384,8 +430,6 @@ function MembersPanel({
     }
   }
 
-  const ROLES = ["member", "moderator", "admin"];
-
   return (
     <>
       <div
@@ -448,9 +492,10 @@ function MembersPanel({
                     <select
                       value={member.role}
                       onChange={(e) => handleRoleChange(member.user_id, e.target.value)}
+                      disabled={member.role === "owner"}
                       className={selectCls}
                     >
-                      {ROLES.map((r) => (
+                      {memberRoleOptions(member.role).map((r) => (
                         <option key={r} value={r}>
                           {r}
                         </option>
@@ -524,11 +569,21 @@ function CommunityRow({
           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
             community.visibility === "private"
               ? "bg-violet-500/15 text-violet-300"
+              : community.visibility === "restricted"
+              ? "bg-amber-500/15 text-amber-300"
               : "bg-blue-500/15 text-blue-300"
           }`}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${community.visibility === "private" ? "bg-violet-400" : "bg-blue-400"}`} />
-          {community.visibility === "private" ? "Private" : "Public"}
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              community.visibility === "private"
+                ? "bg-violet-400"
+                : community.visibility === "restricted"
+                ? "bg-amber-400"
+                : "bg-blue-400"
+            }`}
+          />
+          {VISIBILITY_LABEL[community.visibility ?? "public"] ?? community.visibility ?? "Public"}
         </span>
       </td>
       <td className="px-6 py-4 text-sm text-zinc-400">
@@ -643,6 +698,7 @@ export default function CommunitiesPage() {
   const [communities, setCommunities] = useState<Community[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [editingCommunity, setEditingCommunity] = useState<Community | null>(null);
   const [viewingMembers, setViewingMembers] = useState<Community | null>(null);
@@ -680,13 +736,16 @@ export default function CommunitiesPage() {
 
   async function loadCommunities(page: number) {
     setLoading(true);
+    setLoadError(null);
     try {
       const { communities, totalCount } = await fetchCommunities(page, debouncedSearch);
       setCommunities(communities);
       setTotalCount(totalCount);
       setCurrentPage(page);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      setLoadError(e.message ?? "Failed to load communities");
+      setCommunities([]);
+      setTotalCount(0);
     } finally {
       setLoading(false);
     }
@@ -710,14 +769,6 @@ export default function CommunitiesPage() {
 
   async function handleDelete() {
     if (!deletingCommunity) return;
-    if (
-      !confirm(
-        `Are you sure you want to delete "${deletingCommunity.name ?? "this community"}"? This action cannot be undone.`
-      )
-    ) {
-      setDeletingCommunity(null);
-      return;
-    }
 
     try {
       await deleteCommunity(deletingCommunity.id);
@@ -805,7 +856,11 @@ export default function CommunitiesPage() {
 
         {/* Table */}
         <div className="mt-6">
-          {loading && communities.length === 0 ? (
+          {loadError ? (
+            <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">
+              {loadError}
+            </div>
+          ) : loading && communities.length === 0 ? (
             <CommunitiesTableSkeleton />
           ) : communities.length === 0 ? (
             <div className="flex h-48 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
@@ -875,8 +930,12 @@ export default function CommunitiesPage() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={async () => {
-                          const updated = await reviewCommunityAddress(community.id, "verified");
-                          handleSaved(updated);
+                          try {
+                            const updated = await reviewCommunityAddress(community.id, "verified");
+                            handleSaved(updated);
+                          } catch (e: any) {
+                            alert(e.message);
+                          }
                         }}
                         className="rounded-full bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/25"
                       >
@@ -884,8 +943,12 @@ export default function CommunitiesPage() {
                       </button>
                       <button
                         onClick={async () => {
-                          const updated = await reviewCommunityAddress(community.id, "rejected");
-                          handleSaved(updated);
+                          try {
+                            const updated = await reviewCommunityAddress(community.id, "rejected");
+                            handleSaved(updated);
+                          } catch (e: any) {
+                            alert(e.message);
+                          }
                         }}
                         className="rounded-full bg-rose-500/10 px-3.5 py-1.5 text-xs font-semibold text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/20"
                       >
@@ -909,6 +972,7 @@ export default function CommunitiesPage() {
       {/* Edit panel */}
       {editingCommunity && (
         <EditCommunityPanel
+          key={editingCommunity.id}
           community={editingCommunity}
           onClose={() => setEditingCommunity(null)}
           onSaved={handleSaved}
@@ -918,6 +982,7 @@ export default function CommunitiesPage() {
       {/* Members panel */}
       {viewingMembers && (
         <MembersPanel
+          key={viewingMembers.id}
           community={viewingMembers}
           onClose={() => setViewingMembers(null)}
         />

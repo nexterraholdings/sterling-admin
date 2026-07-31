@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import type {
   BillingEventsResponse,
@@ -12,8 +12,17 @@ import type {
 const PLANS = new Set<BillingPlanId>(["free", "sterling_plus", "sterling_premium"]);
 const STATUSES = new Set<BillingStatus>(["active", "grace_period", "cancelled", "expired", "inactive"]);
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — billing admin requires service-role access."
+    );
+  }
+}
+
 export async function GET(req: NextRequest) {
   await getCurrentAdmin();
+  requireServiceRole();
 
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get("mode") ?? "list";

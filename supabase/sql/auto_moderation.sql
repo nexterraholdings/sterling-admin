@@ -1,30 +1,40 @@
 -- Run this in the Supabase SQL editor (or via CLI migration).
 -- Adds a two-tier automatic response to mass-reported posts, gated by
--- DISTINCT DEVICES (not just distinct accounts) reporting the same post —
--- same anti-multi-accounting reasoning as admin_get_shared_devices()
--- (suspicious_accounts.sql), so a handful of throwaway accounts on one
--- phone can't trigger this.
+-- DISTINCT DEVICES THAT ACTUALLY FILED A REPORT (not just distinct accounts,
+-- and not a reporter's entire device history) reporting the same post.
 --
--- Tier 1 (>=5 distinct devices): posts.status -> 'auto_hidden'.
---   IMPORTANT: confirm the mobile app's feed query actually excludes
---   status = 'auto_hidden'. If it doesn't filter on that value, either
---   update the app's query, or change the literal below to 'removed'
---   (the value the existing manual removePost() action already uses and
---   is proven to hide content).
+-- Tier 1 (>=5 distinct devices): posts.status -> 'auto_hidden', is_pinned -> false.
+--   Confirmed: the mobile app's feed/read queries filter on status = 'active'
+--   (feedAlgorithm.ts, get_home_feed_page, useProfileQuery.ts, useDeepLinking.ts,
+--   notificationNavigation.ts, and the pinned-posts query in useFeedQuery.ts all
+--   check status = 'active'), so 'auto_hidden' is correctly excluded everywhere.
 --
 -- Tier 2 (>=15 distinct devices): additionally calls the existing
 -- admin_ban_user() RPC on the post's author with a 7-day expiry (temporary,
 -- reversible — never permanent) and p_also_ban_devices = false (a human
--- decides on devices once they review).
+-- decides on devices once they review). Guarded per-post (target_type='post',
+-- target_id=post_id) so a user who is auto-suspended once can still be
+-- auto-suspended again if a *different* post of theirs is later mass-reported.
 --
--- Both tiers are one-shot per post/user: guarded by checking audit_logs
+-- Both tiers are one-shot per post: guarded by checking audit_logs
 -- for an existing entry, so additional reports past the threshold don't
 -- re-fire or spam the log. Both log to audit_logs directly (category
 -- 'system', actor_label 'auto-moderation') since triggers can't call the
 -- app's logAdminAction() helper (app/dashboard/lib/audit-log.ts).
 --
--- Assumes: reports(id, reporter_id, report_type, post_id, status, created_at),
--- device_identifiers(user_id, device_id), posts(id, author_id, status),
+-- Device counting: reports.device_id is captured by the mobile client at
+-- submission time (getDeviceIdSafe() in src/lib/utils/deviceId.ts). Reports
+-- filed before this column existed (or from a client that hasn't updated)
+-- fall back to one "device" per distinct reporter, so old rows neither
+-- vanish nor get double-counted. The previous version of this trigger joined
+-- through device_identifiers by reporter_id alone, which summed EVERY device
+-- a reporter has ever registered (phone upgrades, a tablet, reinstalls) —
+-- so 2-3 real reporters could already look like 5-15 "distinct devices" and
+-- trip auto-hide/auto-suspend on a handful of real reports. Do not revert to
+-- that join.
+--
+-- Assumes: reports(id, reporter_id, report_type, post_id, device_id, status,
+-- created_at), posts(id, author_id, status, is_pinned),
 -- audit_logs(category, action, detail, target_type, target_id, actor_label),
 -- and the existing admin_ban_user(p_user_id, p_reason, p_ban_type,
 -- p_expires_at, p_also_ban_devices) RPC used by banned-users/actions.ts.
@@ -43,17 +53,14 @@ begin
     return NEW;
   end if;
 
-  select count(distinct di.device_id)
+  select count(distinct coalesce(r.device_id, 'reporter:' || r.reporter_id::text))
   into v_device_count
-  from device_identifiers di
-  where di.user_id in (
-    select distinct r.reporter_id
-    from reports r
-    where r.post_id = NEW.post_id
-      and r.report_type = 'post'
-  );
+  from reports r
+  where r.post_id = NEW.post_id
+    and r.report_type = 'post';
 
-  -- Tier 1: auto-hide the post
+  -- Tier 1: auto-hide the post (and unpin it — a hidden post must not stay
+  -- pinned at the top of the community feed)
   if v_device_count >= 5
      and not exists (
        select 1 from audit_logs
@@ -61,7 +68,8 @@ begin
      )
   then
     update posts
-    set status = 'auto_hidden'
+    set status = 'auto_hidden',
+        is_pinned = false
     where id = NEW.post_id
       and status is distinct from 'removed';
 
@@ -76,13 +84,15 @@ begin
     );
   end if;
 
-  -- Tier 2: auto-suspend the author (temporary, reversible — never permanent)
+  -- Tier 2: auto-suspend the author (temporary, reversible — never permanent) — once per post
   if v_device_count >= 15 then
     select author_id into v_author_id from posts where id = NEW.post_id;
 
     if v_author_id is not null and not exists (
       select 1 from audit_logs
-      where action = 'auto_suspend_user' and target_id = v_author_id::text
+      where action = 'auto_suspend_user'
+        and target_type = 'post'
+        and target_id = NEW.post_id::text
     ) then
       perform admin_ban_user(
         p_user_id => v_author_id,
@@ -96,9 +106,14 @@ begin
       values (
         'system',
         'auto_suspend_user',
-        format('User auto-suspended for 7 days after a post was reported by %s distinct devices', v_device_count),
-        'user',
-        v_author_id::text,
+        format(
+          'User %s auto-suspended for 7 days after post %s was reported by %s distinct devices',
+          v_author_id,
+          NEW.post_id,
+          v_device_count
+        ),
+        'post',
+        NEW.post_id::text,
         'auto-moderation'
       );
     end if;

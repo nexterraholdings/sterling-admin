@@ -222,23 +222,28 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
 
   const load = useCallback(() => {
     setLoading(true);
+    setError(null);
     listNotificationDefinitions()
       .then((rows) => {
         setDefinitions(rows);
-        onDefinitionsChange?.();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Load failed"))
       .finally(() => setLoading(false));
-  }, [onDefinitionsChange]);
+  }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  const notifyDefinitionsChange = useCallback(() => {
+    onDefinitionsChange?.();
+  }, [onDefinitionsChange]);
+
   async function toggleEnabled(def: NotificationTypeDefinition) {
     try {
       await setNotificationDefinitionEnabled(def.id, !def.enabled);
       load();
+      notifyDefinitionsChange();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Update failed");
     }
@@ -270,6 +275,7 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
       {formMode !== "closed" && (
         <div className="mt-4">
           <DefinitionForm
+            key={formMode === "edit" ? editTarget?.id ?? "edit" : "new"}
             initial={formMode === "edit" ? editTarget : null}
             onCancel={() => {
               setFormMode("closed");
@@ -279,6 +285,7 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
               setFormMode("closed");
               setEditTarget(null);
               load();
+              notifyDefinitionsChange();
             }}
           />
         </div>

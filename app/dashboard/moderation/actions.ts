@@ -1,8 +1,22 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import type { ReportStatus } from "@/lib/types";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
+
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — moderation actions require service-role access."
+    );
+  }
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
 
 type ReportRow = {
   id: string;
@@ -30,6 +44,7 @@ export type EnrichedReport = ReportRow & {
 export type QueueStats = { postPending: number; profilePending: number; bugPending: number };
 
 export async function fetchQueueStats(): Promise<QueueStats> {
+  await assertAdmin();
   const base = (type: string) =>
     supabaseAdmin
       .from("reports")
@@ -54,6 +69,7 @@ export async function fetchReports(
   types: ("post" | "profile" | "bug")[],
   statuses?: ReportStatus[]
 ): Promise<EnrichedReport[]> {
+  await assertAdmin();
   let query = supabaseAdmin
     .from("reports")
     .select("id,created_at,reporter_id,report_type,post_id,reported_user_id,category,description,screenshot_urls,status,review_priority,offense_label")
@@ -98,6 +114,7 @@ export async function fetchReports(
 }
 
 export async function updateReportStatus(id: string, status: ReportStatus): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin
     .from("reports")
     .update({ status })
@@ -106,6 +123,7 @@ export async function updateReportStatus(id: string, status: ReportStatus): Prom
 }
 
 export async function strikeUser(userId: string): Promise<void> {
+  await assertAdmin();
   const { error: fetchError, data: profile } = await supabaseAdmin
     .from("profiles")
     .select("moderation_strike_count")
@@ -132,6 +150,7 @@ export async function strikeUser(userId: string): Promise<void> {
 }
 
 export async function banUser(userId: string, reason?: string): Promise<void> {
+  await assertAdmin();
   const finalReason = reason || "Violation of platform rules";
   const { error } = await supabaseAdmin.rpc("admin_ban_user", {
     p_user_id: userId,
@@ -151,6 +170,7 @@ export async function banUser(userId: string, reason?: string): Promise<void> {
 }
 
 export async function unbanUser(userId: string): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_unban_user", {
     p_user_id: userId,
   });
@@ -167,6 +187,7 @@ export async function unbanUser(userId: string): Promise<void> {
 }
 
 export async function strikePostAuthor(postId: string, reportId: string): Promise<void> {
+  await assertAdmin();
   const { data: post, error: postError } = await supabaseAdmin
     .from("posts")
     .select("author_id")
@@ -180,6 +201,7 @@ export async function strikePostAuthor(postId: string, reportId: string): Promis
 }
 
 export async function banPostAuthor(postId: string, reportId: string): Promise<void> {
+  await assertAdmin();
   const { data: post, error: postError } = await supabaseAdmin
     .from("posts")
     .select("author_id")
@@ -193,9 +215,10 @@ export async function banPostAuthor(postId: string, reportId: string): Promise<v
 }
 
 export async function removePost(reportId: string, postId: string): Promise<void> {
+  await assertAdmin();
   const [r1, r2] = await Promise.all([
     supabaseAdmin.from("reports").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("id", reportId),
-    supabaseAdmin.from("posts").update({ status: "removed" }).eq("id", postId),
+    supabaseAdmin.from("posts").update({ status: "removed", is_pinned: false }).eq("id", postId),
   ]);
   if (r1.error) throw new Error(r1.error.message);
   if (r2.error) throw new Error(r2.error.message);
@@ -211,12 +234,15 @@ export async function removePost(reportId: string, postId: string): Promise<void
 
 // Reverses an auto-hide from the auto-moderation trigger (see
 // supabase/sql/auto_moderation.sql) when a moderator confirms it was a
-// false positive. Clears posts.status back to normal and dismisses the
-// report so it drops out of the pending queue.
+// false positive. Restores posts.status to 'active' (every feed/read query
+// filters on status = 'active' specifically — setting it back to null left
+// the post excluded everywhere, so "restore" silently did nothing) and
+// dismisses the report so it drops out of the pending queue.
 export async function restorePost(postId: string, reportId: string): Promise<void> {
+  await assertAdmin();
   const { error: postError } = await supabaseAdmin
     .from("posts")
-    .update({ status: null })
+    .update({ status: "active" })
     .eq("id", postId);
   if (postError) throw new Error(postError.message);
 

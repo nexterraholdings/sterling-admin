@@ -1,6 +1,7 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import type { Report } from "@/lib/types";
 import { strikeUser as strikeUserAction, banUser as banUserAction } from "@/app/dashboard/moderation/actions";
 import {
@@ -8,6 +9,19 @@ import {
   fetchActiveDeviceBans as fetchActiveDeviceBansAction,
   unbanUser as unbanUserAction,
 } from "@/app/dashboard/banned-users/actions";
+
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — flagged accounts require service-role access."
+    );
+  }
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +130,7 @@ function maxDuplicateGroup(bodies: (string | null)[]): number {
 // ---------------------------------------------------------------------------
 
 export async function fetchFlaggedAccounts(): Promise<FlaggedAccount[]> {
+  await assertAdmin();
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const [profilesRes, postsRes, dismissalsRes, sharedDevicesRes] = await Promise.all([
@@ -228,6 +243,7 @@ export async function fetchFlaggedAccounts(): Promise<FlaggedAccount[]> {
 }
 
 export async function fetchUserReports(userId: string): Promise<Report[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin
     .from("reports")
     .select("id,category,description,status,review_priority,offense_label,created_at,reporter_id,report_type")
@@ -240,6 +256,7 @@ export async function fetchUserReports(userId: string): Promise<Report[]> {
 }
 
 export async function updateStrikes(userId: string, count: number): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin
     .from("profiles")
     .update({ moderation_strike_count: count })
@@ -248,6 +265,7 @@ export async function updateStrikes(userId: string, count: number): Promise<void
 }
 
 export async function dismissSuspicion(userId: string, dismissedBy?: string): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin
     .from("suspicious_account_dismissals")
     .upsert({ user_id: userId, dismissed_by: dismissedBy ?? null, dismissed_at: new Date().toISOString() });
@@ -267,6 +285,7 @@ export const unbanUser = unbanUserAction;
 type ReportedPostRow = Omit<ReportedPostEntry, "post">;
 
 export async function fetchReportedPosts(): Promise<ReportedPostEntry[]> {
+  await assertAdmin();
   const { data: reports, error } = await supabaseAdmin
     .from("reports")
     .select("id,category,description,status,review_priority,offense_label,created_at,post_id")
@@ -295,6 +314,7 @@ export async function fetchReportedPosts(): Promise<ReportedPostEntry[]> {
 }
 
 export async function dismissReport(reportId: string): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin
     .from("reports")
     .update({ status: "dismissed", resolved_at: new Date().toISOString() })
@@ -303,6 +323,7 @@ export async function dismissReport(reportId: string): Promise<void> {
 }
 
 export async function removePost(reportId: string, postId: string): Promise<void> {
+  await assertAdmin();
   const [r1, r2] = await Promise.all([
     supabaseAdmin.from("reports").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("id", reportId),
     supabaseAdmin.from("posts").update({ status: "removed" }).eq("id", postId),

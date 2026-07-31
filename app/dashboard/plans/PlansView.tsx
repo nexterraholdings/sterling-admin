@@ -101,16 +101,16 @@ function formatPlanLabel(plan: string): string {
 function BillingMetricsPanel({ metrics }: { metrics: BillingMetrics | null }) {
   if (!metrics) return null;
   const cards = [
-    { label: "Active Plus", value: metrics.active_plus },
-    { label: "Active Premium", value: metrics.active_premium },
-    { label: "Active total", value: metrics.active_total },
-    { label: "Sandbox active", value: metrics.sandbox_active },
-    { label: "Expired (30d)", value: metrics.expired_last_30_days },
-    { label: "Purchases (30d)", value: metrics.purchase_events_last_30_days },
-    { label: "Webhooks (30d)", value: metrics.webhook_events_last_30_days },
+    { label: "Active Plus", value: metrics.active_plus ?? 0 },
+    { label: "Active Premium", value: metrics.active_premium ?? 0 },
+    { label: "Active total", value: metrics.active_total ?? 0 },
+    { label: "Sandbox active", value: metrics.sandbox_active ?? 0 },
+    { label: "Expired (30d)", value: metrics.expired_last_30_days ?? 0 },
+    { label: "Purchases (30d)", value: metrics.purchase_events_last_30_days ?? 0 },
+    { label: "Webhooks (30d)", value: metrics.webhook_events_last_30_days ?? 0 },
     {
       label: "Est. MRR",
-      value: `$${metrics.estimated_mrr_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      value: `$${Number(metrics.estimated_mrr_usd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
     },
   ];
 
@@ -418,16 +418,22 @@ function ManualUserBillingPanel({ onChanged }: { onChanged: () => void }) {
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!search.trim()) {
       setResults([]);
+      setSearchError(null);
       return;
     }
     const t = setTimeout(async () => {
       setLoading(true);
+      setSearchError(null);
       try {
         setResults(await searchUsers(search.trim()));
+      } catch (err) {
+        setResults([]);
+        setSearchError(err instanceof Error ? err.message : "User search failed");
       } finally {
         setLoading(false);
       }
@@ -481,13 +487,17 @@ function ManualUserBillingPanel({ onChanged }: { onChanged: () => void }) {
           onChange={(e) => {
             setSearch(e.target.value);
             setSelected(null);
+            setSearchError(null);
           }}
           placeholder="Name, email, or username…"
           autoComplete="off"
         />
       </FilterField>
       {loading && <p className="mt-2 text-xs text-zinc-500">Searching…</p>}
-      {!loading && results.length > 0 && !selected && (
+      {searchError && (
+        <div className="mt-3 rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{searchError}</div>
+      )}
+      {!loading && !searchError && results.length > 0 && !selected && (
         <div className="mt-3 space-y-1">
           {results.map((u) => (
             <button
@@ -501,6 +511,9 @@ function ManualUserBillingPanel({ onChanged }: { onChanged: () => void }) {
             </button>
           ))}
         </div>
+      )}
+      {!loading && !searchError && search.trim() && !selected && results.length === 0 && (
+        <p className="mt-3 text-xs text-zinc-500">No users match your search.</p>
       )}
       {selected && (
         <div className="mt-4 space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
@@ -580,17 +593,23 @@ function GrantPlusPanel({ onGranted }: { onGranted: () => void }) {
   const [results, setResults] = useState<Community[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!search.trim()) {
       setResults([]);
+      setSearchError(null);
       return;
     }
     const t = setTimeout(async () => {
       setLoading(true);
+      setSearchError(null);
       try {
         const { communities } = await fetchCommunities(1, search.trim());
         setResults(communities.filter((c) => !c.is_plus));
+      } catch (err) {
+        setResults([]);
+        setSearchError(err instanceof Error ? err.message : "Community search failed");
       } finally {
         setLoading(false);
       }
@@ -617,12 +636,18 @@ function GrantPlusPanel({ onGranted }: { onGranted: () => void }) {
     <SectionCard title="Grant Plus" description="Search for a community to manually grant Plus/Premium status.">
       <Input
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => {
+          setSearch(e.target.value);
+          setSearchError(null);
+        }}
         placeholder="Search communities by name…"
         autoComplete="off"
       />
       {loading && <p className="mt-3 text-xs text-zinc-500">Searching…</p>}
-      {!loading && results.length > 0 && (
+      {searchError && (
+        <div className="mt-3 rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{searchError}</div>
+      )}
+      {!loading && !searchError && results.length > 0 && (
         <div className="mt-3 space-y-2">
           {results.map((c) => (
             <div
@@ -640,7 +665,7 @@ function GrantPlusPanel({ onGranted }: { onGranted: () => void }) {
           ))}
         </div>
       )}
-      {!loading && search.trim() && results.length === 0 && (
+      {!loading && !searchError && search.trim() && results.length === 0 && (
         <p className="mt-3 text-xs text-zinc-500">No matching communities without Plus already.</p>
       )}
     </SectionCard>
@@ -655,23 +680,31 @@ export function PlansView() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    Promise.all([
-      fetchPlusCommunities(),
-      fetch("/api/admin/billing?mode=metrics").then(async (res) => {
-        const body = (await res.json()) as BillingMetrics & { error?: string };
-        if (!res.ok) throw new Error(body.error ?? "Failed to load billing metrics");
-        return body;
-      }),
-    ])
-      .then(([plusCommunities, billingMetrics]) => {
-        setCommunities(plusCommunities);
-        setMetrics(billingMetrics);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load plans data"))
-      .finally(() => setLoading(false));
+    const errors: string[] = [];
+
+    try {
+      const plusCommunities = await fetchPlusCommunities();
+      setCommunities(plusCommunities);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : "Failed to load Plus communities");
+      setCommunities([]);
+    }
+
+    try {
+      const res = await fetch("/api/admin/billing?mode=metrics");
+      const body = (await res.json()) as BillingMetrics & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Failed to load billing metrics");
+      setMetrics(body);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : "Failed to load billing metrics");
+      setMetrics(null);
+    }
+
+    if (errors.length > 0) setError(errors.join(" · "));
+    setLoading(false);
   }, []);
 
   const refreshAll = useCallback(() => {
@@ -699,6 +732,18 @@ export function PlansView() {
 
   return (
     <div className="space-y-6">
+      <div className="relative overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="relative">
+          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Command</p>
+          <h1 className="mt-2 text-2xl font-semibold text-zinc-50 sm:text-3xl">Plans</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
+            Live RevenueCat data, webhook audit, comp grants, and subscriber search. Manual community Plus grants
+            remain for brokerages that pay outside the app until Premium auto-links to communities.
+          </p>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button size="sm" variant="outline" disabled={loading} onClick={refreshAll}>
           Refresh all

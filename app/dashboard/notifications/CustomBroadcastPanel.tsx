@@ -55,13 +55,30 @@ export function CustomBroadcastPanel({ definitionsVersion }: { definitionsVersio
   const selectedDef = definitions.find((d) => d.type === selectedType) ?? null;
 
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
+
     listNotificationDefinitions()
       .then((rows) => {
-        setDefinitions(rows.filter((d) => d.enabled));
-        if (rows.length > 0 && !selectedType) setSelectedType(rows.find((d) => d.enabled)?.type ?? "");
+        if (cancelled) return;
+        const enabled = rows.filter((d) => d.enabled);
+        setDefinitions(enabled);
+        setSelectedType((prev) => {
+          if (prev && enabled.some((d) => d.type === prev)) return prev;
+          return enabled[0]?.type ?? "";
+        });
       })
-      .catch(() => setDefinitions([]));
-  }, [definitionsVersion, selectedType]);
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to load custom types");
+          setDefinitions([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [definitionsVersion]);
 
   useEffect(() => {
     if (selectedDef) {

@@ -1,6 +1,6 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import {
@@ -15,8 +15,17 @@ function rowToDefinition(row: Record<string, unknown>): NotificationTypeDefiniti
   return row as unknown as NotificationTypeDefinition;
 }
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — notification admin requires service-role access."
+    );
+  }
+}
+
 export async function listNotificationDefinitions(): Promise<NotificationTypeDefinition[]> {
   await getCurrentAdmin();
+  requireServiceRole();
   const { data, error } = await supabaseAdmin
     .from("notification_type_definitions")
     .select("*")
@@ -34,6 +43,7 @@ export async function createNotificationDefinition(params: {
   enabled?: boolean;
 }): Promise<NotificationTypeDefinition> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
   const type = normalizeCustomTypeSlug(params.typeSlug);
   if (!isValidCustomTypeSlug(type)) {
     throw new Error("Type must match custom_[a-z0-9_]+");
@@ -84,6 +94,7 @@ export async function updateNotificationDefinition(
   },
 ): Promise<NotificationTypeDefinition> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
   if (!NOTIFICATION_TAP_DESTINATIONS.includes(params.tap_destination)) {
     throw new Error("Invalid tap destination");
   }
@@ -121,6 +132,7 @@ export async function updateNotificationDefinition(
 
 export async function setNotificationDefinitionEnabled(id: string, enabled: boolean): Promise<void> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
   const { data, error } = await supabaseAdmin
     .from("notification_type_definitions")
     .update({ enabled, updated_at: new Date().toISOString() })

@@ -1,7 +1,21 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
+
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — moderation alerts require service-role access."
+    );
+  }
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
 
 export type AlertActionType = "message" | "post" | "comment";
 export type AlertWindowLabel = "standard" | "severe";
@@ -32,6 +46,7 @@ export type ActionEvent = {
 };
 
 export async function fetchModerationAlerts(): Promise<ModerationAlert[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin.rpc("admin_get_moderation_alerts");
   if (error) throw new Error(error.message);
   return data ?? [];
@@ -41,6 +56,7 @@ export async function resolveModerationAlert(
   alertId: string,
   status: "reviewed" | "dismissed"
 ): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_resolve_moderation_alert", {
     p_alert_id: alertId,
     p_status: status,
@@ -57,6 +73,7 @@ export async function resolveModerationAlert(
 }
 
 export async function fetchRecentUserActivity(userId: string, limit = 25): Promise<ActionEvent[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin
     .from("action_events")
     .select("id,user_id,action_type,target_id,created_at")
@@ -68,6 +85,7 @@ export async function fetchRecentUserActivity(userId: string, limit = 25): Promi
 }
 
 export async function unbanUserFromAlert(userId: string): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_unban_user", { p_user_id: userId });
   if (error) throw new Error(error.message);
 

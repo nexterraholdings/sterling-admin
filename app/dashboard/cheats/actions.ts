@@ -1,6 +1,7 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,11 +32,29 @@ export type CommunityItem = {
   created_at: string | null;
 };
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — engagement boosts require service-role access."
+    );
+  }
+}
+
+function escapeIlikeTerm(term: string): string {
+  return term.replace(/[\\%,.():]/g, (c) => `\\${c}`);
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
+
 // ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------
 
 export async function fetchPosts(search?: string): Promise<PostItem[]> {
+  await assertAdmin();
   let query = supabaseAdmin
     .from("posts")
     .select("id,body,author_username,community_name,likes_count,created_at")
@@ -43,8 +62,9 @@ export async function fetchPosts(search?: string): Promise<PostItem[]> {
     .limit(30);
 
   if (search?.trim()) {
+    const term = escapeIlikeTerm(search.trim());
     query = query.or(
-      `body.ilike.%${search}%,author_username.ilike.%${search}%,community_name.ilike.%${search}%`
+      `body.ilike.%${term}%,author_username.ilike.%${term}%,community_name.ilike.%${term}%`
     );
   }
 
@@ -62,6 +82,7 @@ export async function fetchPosts(search?: string): Promise<PostItem[]> {
 }
 
 export async function fetchProfileItems(search?: string): Promise<ProfileItem[]> {
+  await assertAdmin();
   let query = supabaseAdmin
     .from("profiles")
     .select("id,full_name,username,account_role,fake_connection_count")
@@ -69,7 +90,8 @@ export async function fetchProfileItems(search?: string): Promise<ProfileItem[]>
     .limit(30);
 
   if (search?.trim()) {
-    query = query.or(`full_name.ilike.%${search}%,username.ilike.%${search}%`);
+    const term = escapeIlikeTerm(search.trim());
+    query = query.or(`full_name.ilike.%${term}%,username.ilike.%${term}%`);
   }
 
   const { data, error } = await query;
@@ -102,6 +124,7 @@ export async function fetchProfileItems(search?: string): Promise<ProfileItem[]>
 }
 
 export async function fetchCommunities(search?: string): Promise<CommunityItem[]> {
+  await assertAdmin();
   let query = supabaseAdmin
     .from("communities")
     .select("id,name,description,members_count,created_at")
@@ -109,7 +132,8 @@ export async function fetchCommunities(search?: string): Promise<CommunityItem[]
     .limit(30);
 
   if (search?.trim()) {
-    query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
+    const term = escapeIlikeTerm(search.trim());
+    query = query.or(`name.ilike.%${term}%,description.ilike.%${term}%`);
   }
 
   const { data, error } = await query;
@@ -130,6 +154,7 @@ export async function fetchCommunities(search?: string): Promise<CommunityItem[]
 
 
 export async function boostPostLikes(postId: string, amount: number): Promise<number> {
+  await assertAdmin();
   const { data, error: fetchErr } = await supabaseAdmin
     .from("posts")
     .select("likes_count")
@@ -153,6 +178,7 @@ export async function boostProfileConnections(
   profileId: string,
   amount: number
 ): Promise<{ newCount: number; inserted: number }> {
+  await assertAdmin();
   const safeAmount = Math.max(0, Math.floor(Number(amount) || 0));
 
   const [{ data: profile, error: profileErr }, { count, error: countErr }] = await Promise.all([
@@ -187,6 +213,7 @@ export async function boostCommunityMembers(
   communityId: string,
   amount: number
 ): Promise<{ newCount: number; inserted: number }> {
+  await assertAdmin();
   const safeAmount = Math.max(0, Math.floor(Number(amount) || 0));
 
   const { data, error: fetchErr } = await supabaseAdmin

@@ -17,6 +17,9 @@ const inputCls =
 
 export function NotificationsView() {
   const [definitionsVersion, setDefinitionsVersion] = useState(0);
+  const handleDefinitionsChange = useCallback(() => {
+    setDefinitionsVersion((v) => v + 1);
+  }, []);
 
   const [templates, setTemplates] = useState<NotificationTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
@@ -30,6 +33,7 @@ export function NotificationsView() {
 
   const loadTemplates = useCallback(() => {
     setTemplatesLoading(true);
+    setTemplatesError(null);
     fetchTemplates()
       .then(setTemplates)
       .catch((e: unknown) => setTemplatesError(e instanceof Error ? e.message : "Load failed"))
@@ -99,7 +103,15 @@ export function NotificationsView() {
 
   return (
     <div className="space-y-6">
-      <CustomNotificationTypesPanel onDefinitionsChange={() => setDefinitionsVersion((v) => v + 1)} />
+      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Command</p>
+        <h1 className="mt-2 text-2xl font-semibold text-zinc-50 sm:text-3xl">Notifications</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
+          Reference every product notification type, then broadcast push or in-app messages to all users.
+        </p>
+      </div>
+
+      <CustomNotificationTypesPanel onDefinitionsChange={handleDefinitionsChange} />
       <SystemNotificationsTable />
 
       <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">

@@ -1,6 +1,6 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
 import {
@@ -10,16 +10,26 @@ import {
 } from "@/lib/billing/revenueCatServer";
 import type { BillingPlanId, BillingSubscriberRow } from "@/lib/billing/types";
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — billing admin requires service-role access."
+    );
+  }
+}
+
 export async function syncUserBillingFromRevenueCat(userId: string): Promise<BillingSubscriberRow> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
   const secret = process.env.REVENUECAT_SECRET_API_KEY?.trim();
-  if (!secret) {
+  const projectId = process.env.REVENUECAT_PROJECT_ID?.trim();
+  if (!secret || !projectId) {
     throw new Error(
-      "Set REVENUECAT_SECRET_API_KEY in adminsterling (.env.local / Vercel) to pull subscriber state from RevenueCat.",
+      "Set REVENUECAT_SECRET_API_KEY and REVENUECAT_PROJECT_ID in adminsterling (.env.local / Vercel) to pull subscriber state from RevenueCat.",
     );
   }
 
-  const subscriber = await fetchRevenueCatSubscriber(userId, secret);
+  const subscriber = await fetchRevenueCatSubscriber(userId, secret, projectId);
   await applySubscriptionFromSubscriber(supabaseAdmin, userId, subscriber, null);
 
   const row = await fetchBillingRowForUser(userId);
@@ -44,6 +54,7 @@ export async function setManualUserBilling(params: {
   expiresAt?: string | null;
 }): Promise<BillingSubscriberRow> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
   const reason = params.reason.trim();
   if (!reason) throw new Error("Reason is required");
 
@@ -71,6 +82,8 @@ export async function setManualUserBilling(params: {
 }
 
 async function fetchBillingRowForUser(userId: string): Promise<BillingSubscriberRow> {
+  requireServiceRole();
+
   const { data, error } = await supabaseAdmin.rpc("admin_list_billing_subscribers", {
     p_search: userId,
     p_plan: null,

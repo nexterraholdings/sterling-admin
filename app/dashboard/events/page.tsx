@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import {
   fetchEvents,
+  fetchEventById,
   fetchEventAttendees,
   fetchEventCounts,
   updateEvent,
@@ -17,6 +18,22 @@ import { Tabs } from "@/components/dashboard/Tabs";
 
 const PAGE_SIZE = 20;
 const EVENT_TYPES = ["networking", "open_house", "social"];
+
+function eventToForm(event: EventItem) {
+  return {
+    name: event.name ?? "",
+    event_type: event.event_type ?? EVENT_TYPES[0],
+    is_private: event.is_private ?? false,
+    duration_minutes: String(event.duration_minutes ?? ""),
+    starts_at: toDatetimeLocal(event.starts_at),
+    notes: event.notes ?? "",
+  };
+}
+
+function eventTypeOptions(currentType: string) {
+  if (!currentType || EVENT_TYPES.includes(currentType)) return EVENT_TYPES;
+  return [currentType, ...EVENT_TYPES];
+}
 
 // ---------------------------------------------------------------------------
 // Components
@@ -57,16 +74,32 @@ function EditEventPanel({
   onClose: () => void;
   onSaved: (updated: EventItem) => void;
 }) {
-  const [form, setForm] = useState({
-    name: event.name ?? "",
-    event_type: event.event_type ?? EVENT_TYPES[0],
-    is_private: event.is_private ?? false,
-    duration_minutes: String(event.duration_minutes ?? ""),
-    starts_at: toDatetimeLocal(event.starts_at),
-    notes: event.notes ?? "",
-  });
+  const [eventState, setEventState] = useState(event);
+  const [form, setForm] = useState(() => eventToForm(event));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setEventState(event);
+    setForm(eventToForm(event));
+    setSaveError(null);
+
+    fetchEventById(event.id)
+      .then((fresh) => {
+        if (cancelled || !fresh) return;
+        setEventState(fresh);
+        setForm(eventToForm(fresh));
+      })
+      .catch((e) => {
+        if (!cancelled) console.error(e);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [event.id]);
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -84,8 +117,8 @@ function EditEventPanel({
         starts_at: form.starts_at ? new Date(form.starts_at).toISOString() : null,
         notes: form.notes || null,
       };
-      await updateEvent(event.id, updates);
-      onSaved({ ...event, ...updates });
+      await updateEvent(eventState.id, updates);
+      onSaved({ ...eventState, ...updates });
     } catch (e: any) {
       setSaveError(e.message);
     } finally {
@@ -100,7 +133,7 @@ function EditEventPanel({
         <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-5">
           <div>
             <h2 className="text-base font-semibold text-zinc-50">Edit event</h2>
-            <p className="mt-0.5 text-sm text-zinc-500">{event.name ?? "Untitled"}</p>
+            <p className="mt-0.5 text-sm text-zinc-500">{eventState.name ?? "Untitled"}</p>
           </div>
           <button
             onClick={onClose}
@@ -128,7 +161,7 @@ function EditEventPanel({
                 value={form.event_type}
                 onChange={(e) => set("event_type", e.target.value)}
               >
-                {EVENT_TYPES.map((t) => (
+                {eventTypeOptions(form.event_type).map((t) => (
                   <option key={t} value={t}>
                     {t.replace("_", " ")}
                   </option>
@@ -174,7 +207,7 @@ function EditEventPanel({
             </Field>
             <Field label="Address">
               <p className="rounded-xl border border-zinc-800 bg-zinc-800/60 px-3 py-2 text-sm text-zinc-400">
-                {event.address ?? "—"}
+                {eventState.address ?? "—"}
               </p>
             </Field>
           </div>
@@ -451,6 +484,7 @@ export default function EventsPage() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
   const [viewingAttendees, setViewingAttendees] = useState<EventItem | null>(null);
@@ -471,13 +505,16 @@ export default function EventsPage() {
 
   async function loadEvents(page: number) {
     setLoading(true);
+    setLoadError(null);
     try {
       const { events, totalCount } = await fetchEvents(page, debouncedSearch, activeTab);
       setEvents(events);
       setTotalCount(totalCount);
       setCurrentPage(page);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      setLoadError(e.message ?? "Failed to load events");
+      setEvents([]);
+      setTotalCount(0);
     } finally {
       setLoading(false);
     }
@@ -491,7 +528,7 @@ export default function EventsPage() {
     setActiveTab(tabId as EventFilter);
   }
 
-  function handleSaved() {
+  function handleSaved(_updated: EventItem) {
     // Editing starts_at can move an event across the upcoming/past boundary,
     // so re-fetch the current page + counts instead of patching in place.
     setEditingEvent(null);
@@ -501,14 +538,6 @@ export default function EventsPage() {
 
   async function handleDelete() {
     if (!deletingEvent) return;
-    if (
-      !confirm(
-        `Are you sure you want to delete "${deletingEvent.name ?? "this event"}"? This action cannot be undone.`
-      )
-    ) {
-      setDeletingEvent(null);
-      return;
-    }
 
     try {
       await deleteEvent(deletingEvent.id);
@@ -578,7 +607,11 @@ export default function EventsPage() {
         </div>
 
         <div className="mt-6">
-          {loading && events.length === 0 ? (
+          {loadError ? (
+            <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">
+              {loadError}
+            </div>
+          ) : loading && events.length === 0 ? (
             <EventsTableSkeleton />
           ) : events.length === 0 ? (
             <div className="flex h-48 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
@@ -621,11 +654,20 @@ export default function EventsPage() {
       </div>
 
       {editingEvent && (
-        <EditEventPanel event={editingEvent} onClose={() => setEditingEvent(null)} onSaved={handleSaved} />
+        <EditEventPanel
+          key={editingEvent.id}
+          event={editingEvent}
+          onClose={() => setEditingEvent(null)}
+          onSaved={handleSaved}
+        />
       )}
 
       {viewingAttendees && (
-        <AttendeesPanel event={viewingAttendees} onClose={() => setViewingAttendees(null)} />
+        <AttendeesPanel
+          key={viewingAttendees.id}
+          event={viewingAttendees}
+          onClose={() => setViewingAttendees(null)}
+        />
       )}
 
       {deletingEvent && (

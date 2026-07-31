@@ -1,6 +1,6 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
 import type { AuthUserRow, UserDeleteTarget, UserProfile } from "@/lib/types";
@@ -15,6 +15,7 @@ export async function fetchProfiles(
   search = ""
 ): Promise<{ profiles: UserProfile[]; totalCount: number }> {
   await getCurrentAdmin();
+  await requireServiceRole();
 
   const offset = (page - 1) * PAGE_SIZE;
 
@@ -65,11 +66,41 @@ export async function fetchProfiles(
   return { profiles, totalCount: count ?? 0 };
 }
 
+const PROFILE_SELECT =
+  "id,email,full_name,username,role,operating_markets,market_other,main_goals,created_at,updated_at,avatar_url,banner_url,bio,account_role,moderation_strike_count,phone_number";
+
+function normalizeProfile(profile: Record<string, unknown>): UserProfile {
+  return {
+    ...(profile as unknown as UserProfile),
+    operating_markets: (profile.operating_markets as string[] | null) ?? [],
+    main_goals: (profile.main_goals as string[] | null) ?? [],
+    account_role: (profile.account_role as string | null) ?? "member",
+    moderation_strike_count: (profile.moderation_strike_count as number | null) ?? 0,
+  };
+}
+
+export async function fetchProfileById(id: string): Promise<UserProfile | null> {
+  await getCurrentAdmin();
+  await requireServiceRole();
+
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select(PROFILE_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+
+  return normalizeProfile(data as Record<string, unknown>);
+}
+
 export async function fetchAuthUsers(
   page: number,
   search = ""
 ): Promise<{ users: AuthUserRow[]; totalCount: number }> {
   await getCurrentAdmin();
+  await requireServiceRole();
 
   const offset = (page - 1) * PAGE_SIZE;
   const { data, error } = await supabaseAdmin.rpc("admin_list_auth_users", {
@@ -206,6 +237,7 @@ export async function fetchProfileAuthPresence(
   ids: string[]
 ): Promise<string[]> {
   await getCurrentAdmin();
+  await requireServiceRole();
   if (ids.length === 0) return [];
 
   const { data, error } = await supabaseAdmin.rpc("admin_profile_has_auth", {
@@ -242,6 +274,7 @@ export async function updateProfile(
   updates: Partial<UserProfile>
 ): Promise<void> {
   const admin = await getCurrentAdmin();
+  await requireServiceRole();
 
   const { data, error } = await supabaseAdmin
     .from("profiles")
@@ -266,9 +299,9 @@ export async function updateProfile(
 }
 
 async function requireServiceRole(): Promise<void> {
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is not set — cannot delete Auth users"
+      "SUPABASE_SERVICE_ROLE_KEY is not set — admin user management requires service-role access"
     );
   }
 }
@@ -397,6 +430,7 @@ export async function deleteAuthUserOnly(id: string): Promise<void> {
 
 /** Removes profiles row only — auth identity (if any) is left behind. */
 export async function deleteProfileOnly(id: string): Promise<void> {
+  await requireServiceRole();
   const admin = await getCurrentAdmin();
   const label = await describeUser(id);
 
@@ -434,6 +468,7 @@ export async function deleteUsersByTarget(
   target: UserDeleteTarget
 ): Promise<{ deleted: string[]; failed: Array<{ id: string; error: string }> }> {
   await getCurrentAdmin();
+  await requireServiceRole();
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   const deleted: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];

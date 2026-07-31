@@ -8,6 +8,7 @@ import { banUser, type BanType } from "@/app/dashboard/banned-users/actions";
 import { strikeUser } from "@/app/dashboard/moderation/actions";
 import {
   fetchProfiles,
+  fetchProfileById,
   fetchAuthUsers,
   fetchProfileAuthPresence,
   updateProfile,
@@ -62,6 +63,20 @@ const inputCls =
   "w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-500 focus:border-zinc-500 focus:ring-2 focus:ring-zinc-700";
 const selectCls =
   "w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-700";
+const readOnlyCls =
+  "rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200";
+
+function userToForm(user: UserProfile) {
+  return {
+    full_name: user.full_name ?? "",
+    username: user.username ?? "",
+    account_role: user.account_role ?? "member",
+    role: user.role ?? "",
+    bio: user.bio ?? "",
+    phone_number: user.phone_number ?? "",
+    moderation_strike_count: user.moderation_strike_count,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Devices
@@ -524,15 +539,8 @@ function EditUserPanel({
   onSaved: (updated: UserProfile) => void;
   onDeleted: (userId: string, target: UserDeleteTarget) => void;
 }) {
-  const [form, setForm] = useState({
-    full_name: user.full_name ?? "",
-    username: user.username ?? "",
-    account_role: user.account_role ?? "member",
-    role: user.role ?? "",
-    bio: user.bio ?? "",
-    phone_number: user.phone_number ?? "",
-    moderation_strike_count: user.moderation_strike_count,
-  });
+  const [profile, setProfile] = useState(user);
+  const [form, setForm] = useState(() => userToForm(user));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -553,6 +561,30 @@ function EditUserPanel({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    setProfile(user);
+    setForm(userToForm(user));
+    setSaveError(null);
+    setShowBanForm(false);
+    setShowDeleteForm(false);
+
+    fetchProfileById(user.id)
+      .then((fresh) => {
+        if (cancelled || !fresh) return;
+        setProfile(fresh);
+        setForm(userToForm(fresh));
+      })
+      .catch((e) => {
+        if (!cancelled) console.error(e);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user.id]);
+
   const hasAuth = user.has_auth !== false;
   const hasProfile = true;
 
@@ -569,7 +601,7 @@ function EditUserPanel({
     setBanError(null);
     try {
       await banUser({
-        userId: user.id,
+        userId: profile.id,
         reason: banForm.reason.trim(),
         banType: banForm.banType,
         expiresAt: banForm.expiresAt ? new Date(banForm.expiresAt).toISOString() : null,
@@ -587,10 +619,10 @@ function EditUserPanel({
     setStriking(true);
     setStrikeError(null);
     try {
-      await strikeUser(user.id);
+      await strikeUser(profile.id);
       const newCount = form.moderation_strike_count + 1;
       set("moderation_strike_count", newCount);
-      onSaved({ ...user, moderation_strike_count: newCount });
+      onSaved({ ...profile, moderation_strike_count: newCount });
     } catch (e: any) {
       setStrikeError(e.message);
     } finally {
@@ -602,8 +634,8 @@ function EditUserPanel({
     setDeleting(true);
     setDeleteError(null);
     try {
-      await deleteUserByTarget(user.id, target);
-      onDeleted(user.id, target);
+      await deleteUserByTarget(profile.id, target);
+      onDeleted(profile.id, target);
       if (target === "auth") {
         setShowDeleteForm(false);
       }
@@ -627,8 +659,8 @@ function EditUserPanel({
         phone_number: form.phone_number || null,
         moderation_strike_count: Number(form.moderation_strike_count),
       };
-      await updateProfile(user.id, updates);
-      onSaved({ ...user, ...updates });
+      await updateProfile(profile.id, updates);
+      onSaved({ ...profile, ...updates });
     } catch (e: any) {
       setSaveError(e.message);
     } finally {
@@ -648,7 +680,7 @@ function EditUserPanel({
           <div>
             <h2 className="text-base font-semibold text-zinc-50">Edit user</h2>
             <p className="mt-0.5 text-sm text-zinc-500">
-              {user.email ?? user.username ?? user.id}
+              {profile.email ?? profile.username ?? profile.id}
             </p>
             <div className="mt-2">
               <PresenceBadge present={hasAuth} label="Auth" />
@@ -667,6 +699,9 @@ function EditUserPanel({
         {/* Form */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
           <div className="space-y-5">
+            <Field label="Email">
+              <p className={readOnlyCls}>{profile.email ?? "—"}</p>
+            </Field>
             <Field label="Full name">
               <input
                 className={inputCls}
@@ -761,7 +796,7 @@ function EditUserPanel({
             </p>
           )}
 
-          <DevicesSection userId={user.id} />
+          <DevicesSection userId={profile.id} />
 
           {showBanForm && (
             <div className="mt-6 space-y-4 rounded-2xl border border-rose-500/30 bg-rose-500/5 p-4">
@@ -835,7 +870,7 @@ function EditUserPanel({
 
           {showDeleteForm && (
             <DeleteTargetForm
-              label={user.email ?? user.username ?? user.id}
+              label={profile.email ?? profile.username ?? profile.id}
               hasAuth={hasAuth}
               hasProfile={hasProfile}
               deleting={deleting}
@@ -1464,6 +1499,7 @@ function AuthUsersTable({
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const allSelected = users.length > 0 && users.every((u) => selectedIds.has(u.id));
@@ -1472,6 +1508,7 @@ function AuthUsersTable({
 
   useEffect(() => {
     setLoading(true);
+    setLoadError(null);
     setUsers([]);
     setCurrentPage(1);
     setSelectedIds(new Set());
@@ -1481,12 +1518,15 @@ function AuthUsersTable({
         setUsers(next);
         setTotalCount(count);
       })
-      .catch(console.error)
+      .catch((err) =>
+        setLoadError(err instanceof Error ? err.message : "Failed to load auth users")
+      )
       .finally(() => setLoading(false));
   }, [search]);
 
   function goToPage(page: number) {
     setLoading(true);
+    setLoadError(null);
     setSelectedIds(new Set());
     fetchAuthUsers(page, search)
       .then(({ users: next, totalCount: count }) => {
@@ -1494,7 +1534,9 @@ function AuthUsersTable({
         setTotalCount(count);
         setCurrentPage(page);
       })
-      .catch(console.error)
+      .catch((err) =>
+        setLoadError(err instanceof Error ? err.message : "Failed to load auth users")
+      )
       .finally(() => setLoading(false));
   }
 
@@ -1571,6 +1613,14 @@ function AuthUsersTable({
     } finally {
       setBulkDeleting(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">
+        {loadError}
+      </div>
+    );
   }
 
   if (loading && users.length === 0) {
@@ -1689,6 +1739,7 @@ function UsersTable({
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const filter: FetchFilter = { account_role: accountRole, flagged };
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -1710,6 +1761,7 @@ function UsersTable({
 
   useEffect(() => {
     setLoading(true);
+    setLoadError(null);
     setUsers([]);
     setCurrentPage(1);
     setSelectedIds(new Set());
@@ -1720,12 +1772,15 @@ function UsersTable({
         setUsers(withAuth);
         setTotalCount(totalCount);
       })
-      .catch(console.error)
+      .catch((err) =>
+        setLoadError(err instanceof Error ? err.message : "Failed to load users")
+      )
       .finally(() => setLoading(false));
   }, [accountRole, flagged, search]);
 
   function goToPage(page: number) {
     setLoading(true);
+    setLoadError(null);
     setSelectedIds(new Set());
     fetchProfiles(page, filter, search)
       .then(async ({ profiles, totalCount }) => {
@@ -1734,7 +1789,9 @@ function UsersTable({
         setTotalCount(totalCount);
         setCurrentPage(page);
       })
-      .catch(console.error)
+      .catch((err) =>
+        setLoadError(err instanceof Error ? err.message : "Failed to load users")
+      )
       .finally(() => setLoading(false));
   }
 
@@ -1818,6 +1875,14 @@ function UsersTable({
     }
   }
 
+  if (loadError) {
+    return (
+      <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">
+        {loadError}
+      </div>
+    );
+  }
+
   if (loading && users.length === 0) {
     return <UsersTableSkeleton />;
   }
@@ -1834,6 +1899,7 @@ function UsersTable({
     <>
       {editingUser && (
         <EditUserPanel
+          key={editingUser.id}
           user={editingUser}
           onClose={() => setEditingUser(null)}
           onSaved={handleSaved}

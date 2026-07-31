@@ -532,6 +532,7 @@ export function CheatsView() {
 
   const [communities, setCommunities] = useState<CommunityItem[]>([]);
   const [communitiesLoading, setCommunitiesLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Debounce
   useEffect(() => {
@@ -541,25 +542,37 @@ export function CheatsView() {
 
   const loadPosts = useCallback((q: string) => {
     setPostsLoading(true);
+    setLoadError(null);
     fetchPosts(q || undefined)
       .then(setPosts)
-      .catch(console.error)
+      .catch((err) => {
+        setPosts([]);
+        setLoadError(err instanceof Error ? err.message : "Failed to load posts");
+      })
       .finally(() => setPostsLoading(false));
   }, []);
 
   const loadProfiles = useCallback((q: string) => {
     setProfilesLoading(true);
+    setLoadError(null);
     fetchProfileItems(q || undefined)
       .then(setProfiles)
-      .catch(console.error)
+      .catch((err) => {
+        setProfiles([]);
+        setLoadError(err instanceof Error ? err.message : "Failed to load profiles");
+      })
       .finally(() => setProfilesLoading(false));
   }, []);
 
   const loadCommunities = useCallback((q: string) => {
     setCommunitiesLoading(true);
+    setLoadError(null);
     fetchCommunities(q || undefined)
       .then(setCommunities)
-      .catch(console.error)
+      .catch((err) => {
+        setCommunities([]);
+        setLoadError(err instanceof Error ? err.message : "Failed to load communities");
+      })
       .finally(() => setCommunitiesLoading(false));
   }, []);
 
@@ -579,6 +592,7 @@ export function CheatsView() {
     setTab(next);
     setRawSearch("");
     setSearch("");
+    setLoadError(null);
   }
 
   return (
@@ -666,42 +680,45 @@ export function CheatsView() {
 
         {/* Results */}
         <div className="mt-4 space-y-3">
+          {loadError && (
+            <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{loadError}</div>
+          )}
           {tab === "posts" ? (
             postsLoading ? (
               Array.from({ length: 4 }).map((_, i) => <PostCardSkeleton key={i} />)
             ) : posts.length > 0 ? (
               posts.map((post) => <PostCard key={post.id} post={post} />)
-            ) : (
+            ) : !loadError ? (
               <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60">
                 <p className="text-sm text-zinc-500">
                   {rawSearch ? "No posts match your search" : "No posts found"}
                 </p>
               </div>
-            )
+            ) : null
           ) : tab === "profiles" ? (
             profilesLoading ? (
               Array.from({ length: 4 }).map((_, i) => <ProfileCardSkeleton key={i} />)
             ) : profiles.length > 0 ? (
               profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} />)
-            ) : (
+            ) : !loadError ? (
               <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60">
                 <p className="text-sm text-zinc-500">
                   {rawSearch ? "No profiles match your search" : "No profiles found"}
                 </p>
               </div>
-            )
+            ) : null
           ) : (
             communitiesLoading ? (
               Array.from({ length: 4 }).map((_, i) => <CommunityCardSkeleton key={i} />)
             ) : communities.length > 0 ? (
               communities.map((community) => <CommunityCard key={community.id} community={community} />)
-            ) : (
+            ) : !loadError ? (
               <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60">
                 <p className="text-sm text-zinc-500">
                   {rawSearch ? "No communities match your search" : "No communities found"}
                 </p>
               </div>
-            )
+            ) : null
           )}
         </div>
       </div>

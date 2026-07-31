@@ -1,6 +1,6 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import type { AddressVerificationStatus, Community } from "@/lib/communities/types";
@@ -24,6 +24,30 @@ export type CommunityMember = {
   } | null;
 };
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — community management requires service-role access."
+    );
+  }
+}
+
+function escapeIlikeTerm(term: string): string {
+  return term.replace(/[\\%,.():]/g, (c) => `\\${c}`);
+}
+
+function normalizeCommunity(row: Record<string, unknown>): Community {
+  return {
+    ...(row as unknown as Community),
+    community_type: (row.community_type as Community["community_type"] | null) ?? "standard",
+    address_verification_status:
+      (row.address_verification_status as AddressVerificationStatus | null) ?? "unverified",
+    members_count: (row.members_count as number | null) ?? 0,
+    posts_count: (row.posts_count as number | null) ?? 0,
+    is_plus: Boolean(row.is_plus),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------
@@ -32,6 +56,9 @@ export async function fetchCommunities(
   page: number,
   search = ""
 ): Promise<{ communities: Community[]; totalCount: number }> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const offset = (page - 1) * PAGE_SIZE;
 
   let countQuery = supabaseAdmin
@@ -45,9 +72,10 @@ export async function fetchCommunities(
     .range(offset, offset + PAGE_SIZE - 1);
 
   if (search.trim()) {
-    const term = search.trim();
-    countQuery = countQuery.or(`name.ilike.%${term}%,description.ilike.%${term}%`);
-    dataQuery = dataQuery.or(`name.ilike.%${term}%,description.ilike.%${term}%`);
+    const term = escapeIlikeTerm(search.trim());
+    const orFilter = `name.ilike.%${term}%,description.ilike.%${term}%`;
+    countQuery = countQuery.or(orFilter);
+    dataQuery = dataQuery.or(orFilter);
   }
 
   const [{ count }, { data, error }] = await Promise.all([
@@ -58,12 +86,31 @@ export async function fetchCommunities(
   if (error) throw new Error(error.message);
 
   return {
-    communities: (data ?? []) as Community[],
+    communities: (data ?? []).map((row: Record<string, unknown>) => normalizeCommunity(row)),
     totalCount: count ?? 0,
   };
 }
 
+export async function fetchCommunityById(id: string): Promise<Community | null> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
+  const { data, error } = await supabaseAdmin
+    .from("communities")
+    .select(COMMUNITY_COLUMNS)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+
+  return normalizeCommunity(data as Record<string, unknown>);
+}
+
 export async function fetchAddressVerificationQueue(): Promise<Community[]> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { data, error } = await supabaseAdmin
     .from("communities")
     .select(COMMUNITY_COLUMNS)
@@ -71,10 +118,13 @@ export async function fetchAddressVerificationQueue(): Promise<Community[]> {
     .order("address_reviewed_at", { ascending: true, nullsFirst: true });
 
   if (error) throw new Error(error.message);
-  return (data ?? []) as Community[];
+  return (data ?? []).map((row: Record<string, unknown>) => normalizeCommunity(row));
 }
 
 export async function fetchPlusCommunities(): Promise<Community[]> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { data, error } = await supabaseAdmin
     .from("communities")
     .select(COMMUNITY_COLUMNS)
@@ -82,10 +132,13 @@ export async function fetchPlusCommunities(): Promise<Community[]> {
     .order("is_plus_granted_at", { ascending: false, nullsFirst: false });
 
   if (error) throw new Error(error.message);
-  return (data ?? []) as Community[];
+  return (data ?? []).map((row: Record<string, unknown>) => normalizeCommunity(row));
 }
 
 export async function fetchCommunityMembers(communityId: string): Promise<CommunityMember[]> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { data, error } = await supabaseAdmin
     .from("community_members")
     .select("user_id,role")
@@ -122,6 +175,9 @@ export async function updateCommunity(
   id: string,
   updates: Partial<Community>
 ): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { error } = await supabaseAdmin
     .from("communities")
     .update(updates)
@@ -130,6 +186,9 @@ export async function updateCommunity(
 }
 
 export async function deleteCommunity(id: string): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { error } = await supabaseAdmin
     .from("communities")
     .delete()
@@ -138,6 +197,9 @@ export async function deleteCommunity(id: string): Promise<void> {
 }
 
 export async function removeCommunityMember(communityId: string, userId: string): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { error } = await supabaseAdmin
     .from("community_members")
     .delete()
@@ -151,6 +213,9 @@ export async function updateCommunityMemberRole(
   userId: string,
   role: string
 ): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+
   const { error } = await supabaseAdmin
     .from("community_members")
     .update({ role })
@@ -164,6 +229,8 @@ export async function setCommunityType(
   communityType: "standard" | "brokerage"
 ): Promise<void> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
+
   const { data: before, error: fetchError } = await supabaseAdmin
     .from("communities")
     .select("name,community_type")
@@ -193,6 +260,7 @@ export async function reviewCommunityAddress(
   status: AddressVerificationStatus
 ): Promise<Community> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
 
   const { data, error } = await supabaseAdmin.rpc("admin_review_community_address", {
     p_community_id: communityId,
@@ -211,7 +279,7 @@ export async function reviewCommunityAddress(
     actorLabel: admin.email,
   });
 
-  return data as Community;
+  return normalizeCommunity(data as Record<string, unknown>);
 }
 
 export async function setCommunityIsPlus(
@@ -220,6 +288,7 @@ export async function setCommunityIsPlus(
   reason?: string
 ): Promise<Community> {
   const admin = await getCurrentAdmin();
+  requireServiceRole();
 
   const { data, error } = await supabaseAdmin.rpc("admin_set_community_is_plus", {
     p_community_id: communityId,
@@ -238,5 +307,5 @@ export async function setCommunityIsPlus(
     actorLabel: admin.email,
   });
 
-  return data as Community;
+  return normalizeCommunity(data as Record<string, unknown>);
 }

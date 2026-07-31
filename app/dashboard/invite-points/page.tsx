@@ -85,6 +85,7 @@ function UserSearchPicker({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -93,13 +94,21 @@ function UserSearchPicker({
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!query.trim()) {
       setResults([]);
+      setSearchError(null);
       return;
     }
     debounceRef.current = setTimeout(() => {
       setSearching(true);
+      setSearchError(null);
       searchUsers(query)
-        .then(setResults)
-        .catch(console.error)
+        .then((users) => {
+          setResults(users);
+          setSearchError(null);
+        })
+        .catch((err) => {
+          setResults([]);
+          setSearchError(err instanceof Error ? err.message : "User search failed");
+        })
         .finally(() => setSearching(false));
     }, 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
@@ -143,7 +152,7 @@ function UserSearchPicker({
     <div className="relative" ref={containerRef}>
       <input
         value={query}
-        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setSearchError(null); }}
         onFocus={() => setOpen(true)}
         placeholder="Search by name, username, or email"
         className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none placeholder:text-zinc-600 focus:border-emerald-500/50"
@@ -159,6 +168,8 @@ function UserSearchPicker({
                 </div>
               ))}
             </div>
+          ) : searchError ? (
+            <div className="px-3 py-4 text-center text-sm text-rose-300">{searchError}</div>
           ) : results.length === 0 ? (
             <div className="px-3 py-4 text-center text-sm text-zinc-500">No users found</div>
           ) : (

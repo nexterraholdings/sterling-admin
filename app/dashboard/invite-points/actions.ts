@@ -1,8 +1,25 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
+
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — invite point adjustments require service-role access."
+    );
+  }
+}
+
+function escapeIlikeTerm(term: string): string {
+  return term.replace(/[\\%,.():]/g, (c) => `\\${c}`);
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
 
 export type UserSearchResult = {
   id: string;
@@ -13,13 +30,15 @@ export type UserSearchResult = {
 };
 
 export async function searchUsers(query: string): Promise<UserSearchResult[]> {
+  await assertAdmin();
   const term = query.trim();
   if (!term) return [];
 
+  const escaped = escapeIlikeTerm(term);
   const { data, error } = await supabaseAdmin
     .from("profiles")
     .select("id,email,username,full_name,referral_count")
-    .or(`full_name.ilike.%${term}%,email.ilike.%${term}%,username.ilike.%${term}%`)
+    .or(`full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,username.ilike.%${escaped}%`)
     .order("full_name", { ascending: true })
     .limit(10);
   if (error) throw new Error(error.message);
@@ -42,6 +61,7 @@ export async function adjustInvitePoints(params: {
   pointsDelta: number;
   reason: string;
 }): Promise<InvitePointAdjustment> {
+  await assertAdmin();
   const admin = await getCurrentAdmin();
   const reason = params.reason.trim();
 
@@ -126,6 +146,7 @@ async function enrichAdjustments(rows: AdjustmentRow[]): Promise<RecentAdjustmen
 }
 
 export async function fetchRecentAdjustments(limit = 20): Promise<RecentAdjustment[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin
     .from("admin_invite_point_adjustments")
     .select("id,target_user_id,points_delta,reason,created_by_admin_id,created_at")
@@ -139,6 +160,7 @@ export async function fetchRecentAdjustments(limit = 20): Promise<RecentAdjustme
 // Powers the "history for this user" list shown once a target is selected, so an
 // admin can see prior grants/deductions before adding another one.
 export async function fetchAdjustmentsForUser(userId: string, limit = 5): Promise<RecentAdjustment[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin
     .from("admin_invite_point_adjustments")
     .select("id,target_user_id,points_delta,reason,created_by_admin_id,created_at")

@@ -185,6 +185,7 @@ export function SystemNotificationsTable() {
 
       {editingRow && editingCopy && (
         <SystemNotificationEditorDrawer
+          key={editingRow.type}
           row={editingRow}
           initialCopy={editingCopy}
           onClose={() => setEditingRow(null)}

@@ -1,6 +1,7 @@
 "use server";
 
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
+import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 
 export type UserDevice = {
@@ -23,7 +24,21 @@ export type DeviceAccount = {
   last_seen_at: string | null;
 };
 
+function requireServiceRole(): void {
+  if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is not configured — device management requires service-role access."
+    );
+  }
+}
+
+async function assertAdmin(): Promise<void> {
+  await getCurrentAdmin();
+  requireServiceRole();
+}
+
 export async function fetchUserDevices(userId: string): Promise<UserDevice[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin.rpc("admin_get_user_devices", {
     p_user_id: userId,
   });
@@ -32,6 +47,7 @@ export async function fetchUserDevices(userId: string): Promise<UserDevice[]> {
 }
 
 export async function fetchDeviceAccounts(deviceId: string): Promise<DeviceAccount[]> {
+  await assertAdmin();
   const { data, error } = await supabaseAdmin.rpc("admin_get_device_accounts", {
     p_device_id: deviceId,
   });
@@ -45,6 +61,7 @@ export async function banDevice(params: {
   expiresAt: string | null;
   linkedUserId?: string | null;
 }): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_ban_device", {
     p_device_id: params.deviceId,
     p_reason: params.reason,
@@ -63,6 +80,7 @@ export async function banDevice(params: {
 }
 
 export async function unbanDevice(deviceId: string): Promise<void> {
+  await assertAdmin();
   const { error } = await supabaseAdmin.rpc("admin_unban_device", {
     p_device_id: deviceId,
   });

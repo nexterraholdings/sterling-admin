@@ -23,6 +23,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { href: "/dashboard/news", label: "News", short: "NW", description: "Manage the daily news override" },
       { href: "/dashboard/plans", label: "Plans", short: "PL", description: "Billing, comps, and brokerage Plus" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app broadcast messages" },
+      { href: "/dashboard/testing", label: "Testing", short: "QA", description: "QA tools for streaks and mobile flows" },
     ],
   },
   {

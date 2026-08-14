@@ -36,7 +36,7 @@ $$;
 create table if not exists suspicious_account_dismissals (
   user_id uuid primary key references profiles(id) on delete cascade,
   dismissed_at timestamptz not null default now(),
-  dismissed_by uuid references profiles(id)
+  dismissed_by uuid references profiles(id) on delete set null
 );
 
 alter table suspicious_account_dismissals enable row level security;

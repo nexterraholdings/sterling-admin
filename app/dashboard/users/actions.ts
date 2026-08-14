@@ -306,12 +306,61 @@ async function requireServiceRole(): Promise<void> {
   }
 }
 
+function isMissingRelationError(
+  error: { message?: string; code?: string } | null
+): boolean {
+  const msg = (error?.message ?? "").toLowerCase();
+  const code = error?.code ?? "";
+  return (
+    code === "PGRST204" ||
+    code === "PGRST205" ||
+    code === "42P01" ||
+    code === "42703" ||
+    msg.includes("does not exist") ||
+    msg.includes("could not find the table") ||
+    msg.includes("could not find the column") ||
+    msg.includes("schema cache")
+  );
+}
+
+async function deleteByColumn(
+  table: string,
+  column: string,
+  id: string,
+  context: string
+): Promise<void> {
+  const { error } = await supabaseAdmin.from(table).delete().eq(column, id);
+  if (error && !isMissingRelationError(error)) {
+    throw new Error(
+      `${context}: failed clearing ${table}.${column}: ${error.message}`
+    );
+  }
+}
+
+async function nullByColumn(
+  table: string,
+  column: string,
+  id: string,
+  context: string
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from(table)
+    .update({ [column]: null })
+    .eq(column, id);
+  if (error && !isMissingRelationError(error)) {
+    throw new Error(
+      `${context}: failed clearing ${table}.${column}: ${error.message}`
+    );
+  }
+}
+
 async function clearOwnedCommunities(id: string, context: string): Promise<void> {
   const { data: owned, error: ownedError } = await supabaseAdmin
     .from("communities")
     .select("id")
     .eq("owner_id", id);
   if (ownedError) {
+    if (isMissingRelationError(ownedError)) return;
     throw new Error(
       `${context}: failed listing owned communities: ${ownedError.message}`
     );
@@ -323,7 +372,7 @@ async function clearOwnedCommunities(id: string, context: string): Promise<void>
       .from("notifications")
       .update({ community_id: null })
       .in("community_id", communityIds);
-    if (notifError) {
+    if (notifError && !isMissingRelationError(notifError)) {
       throw new Error(
         `${context}: failed clearing notification community links: ${notifError.message}`
       );
@@ -334,31 +383,124 @@ async function clearOwnedCommunities(id: string, context: string): Promise<void>
     .from("communities")
     .delete()
     .eq("owner_id", id);
-  if (error) {
+  if (error && !isMissingRelationError(error)) {
     throw new Error(
       `${context}: failed clearing owned communities: ${error.message}`
     );
   }
 }
 
-async function clearAuthDeleteBlockers(id: string, context: string): Promise<void> {
-  const { error: feedError } = await supabaseAdmin
-    .from("feed_recommendations")
-    .delete()
-    .eq("user_id", id);
-  if (feedError) {
+async function clearOwnedDiscussions(id: string, context: string): Promise<void> {
+  const { data: comments, error: commentError } = await supabaseAdmin
+    .from("area_discussion_comments")
+    .select("id")
+    .eq("author_id", id);
+  if (commentError && !isMissingRelationError(commentError)) {
     throw new Error(
-      `${context}: failed clearing feed_recommendations: ${feedError.message}`
+      `${context}: failed listing discussion comments: ${commentError.message}`
     );
   }
+  const commentIds = (comments ?? []).map((row: { id: string }) => row.id);
+  if (commentIds.length > 0) {
+    const { error: unlinkError } = await supabaseAdmin
+      .from("area_discussion_comments")
+      .update({ parent_id: null })
+      .in("parent_id", commentIds);
+    if (unlinkError && !isMissingRelationError(unlinkError)) {
+      throw new Error(
+        `${context}: failed unlinking discussion comment replies: ${unlinkError.message}`
+      );
+    }
+  }
+  await deleteByColumn("area_discussion_comments", "author_id", id, context);
+  await deleteByColumn("area_rates", "user_id", id, context);
+  await deleteByColumn("area_discussion_participants", "user_id", id, context);
+  await deleteByColumn("area_discussion_moderators", "user_id", id, context);
+  await deleteByColumn("discussion_live_chat_messages", "author_id", id, context);
+  await deleteByColumn("discussion_stewardship_claims", "user_id", id, context);
+  await deleteByColumn("discussion_updates", "author_id", id, context);
+  await deleteByColumn("discussion_updates", "created_by", id, context);
+  await deleteByColumn("discussion_updates", "user_id", id, context);
+  await deleteByColumn("discussion_media", "author_id", id, context);
+  await deleteByColumn("discussion_media", "created_by", id, context);
+  await deleteByColumn("discussion_media", "user_id", id, context);
+  await deleteByColumn("discussion_resources", "author_id", id, context);
+  await deleteByColumn("discussion_resources", "created_by", id, context);
+  await deleteByColumn("discussion_resources", "user_id", id, context);
+
+  const { data: owned, error: ownedError } = await supabaseAdmin
+    .from("area_discussions")
+    .select("id")
+    .eq("creator_id", id);
+  if (ownedError) {
+    if (isMissingRelationError(ownedError)) return;
+    throw new Error(
+      `${context}: failed listing owned discussions: ${ownedError.message}`
+    );
+  }
+
+  const discussionIds = (owned ?? []).map((row: { id: string }) => row.id);
+  if (discussionIds.length > 0) {
+    const { error: reportsError } = await supabaseAdmin
+      .from("reports")
+      .update({ discussion_id: null })
+      .in("discussion_id", discussionIds);
+    if (reportsError && !isMissingRelationError(reportsError)) {
+      throw new Error(
+        `${context}: failed clearing report discussion links: ${reportsError.message}`
+      );
+    }
+    const { error: deleteError } = await supabaseAdmin
+      .from("area_discussions")
+      .delete()
+      .eq("creator_id", id);
+    if (deleteError && !isMissingRelationError(deleteError)) {
+      throw new Error(
+        `${context}: failed deleting owned discussions: ${deleteError.message}`
+      );
+    }
+  }
+}
+
+async function clearProfileDeleteBlockers(
+  id: string,
+  context: string
+): Promise<void> {
+  await deleteByColumn(
+    "admin_invite_point_adjustments",
+    "target_user_id",
+    id,
+    context
+  );
+  await deleteByColumn(
+    "admin_invite_point_adjustments",
+    "created_by_admin_id",
+    id,
+    context
+  );
+  await nullByColumn("market_news_overrides", "created_by", id, context);
+  await nullByColumn(
+    "suspicious_account_dismissals",
+    "dismissed_by",
+    id,
+    context
+  );
+}
+
+async function clearAuthDeleteBlockers(id: string, context: string): Promise<void> {
+  await deleteByColumn("feed_recommendations", "user_id", id, context);
   await clearOwnedCommunities(id, context);
+  await clearOwnedDiscussions(id, context);
+  await clearProfileDeleteBlockers(id, context);
+}
+
+async function authUserExists(id: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(id);
+  return !error && Boolean(data?.user);
 }
 
 async function verifyAuthUserGone(id: string): Promise<void> {
-  const { data: remaining, error: lookupError } =
-    await supabaseAdmin.auth.admin.getUserById(id);
-  // getUserById returns an error when the user is missing — that is success here.
-  if (!lookupError && remaining?.user) {
+  if (await authUserExists(id)) {
     throw new Error(
       "Auth user still exists after delete. A foreign key is likely blocking auth.users deletion — check Supabase logs."
     );
@@ -371,19 +513,27 @@ export async function deleteUserAccount(id: string): Promise<void> {
   const admin = await getCurrentAdmin();
   const label = await describeUser(id);
 
-  // Prefer SQL RPC (drops owned communities, then DELETE auth.users → cascades).
-  // Fall back to Auth Admin API after clearing the same community blocker.
+  // Prefer SQL RPC (drops owned hubs/communities, then DELETE auth.users).
+  // If the RPC is missing, no-ops (e.g. gated on auth.uid() under service role),
+  // or leaves the auth row, fall through to Auth Admin API after clearing FKs.
   const { error: rpcError } = await supabaseAdmin.rpc("admin_delete_user", {
     p_user_id: id,
   });
 
-  if (rpcError) {
-    await clearAuthDeleteBlockers(id, `Could not delete user (${rpcError.message})`);
+  const rpcRemovedUser = !rpcError && !(await authUserExists(id));
+  if (!rpcRemovedUser) {
+    const why = rpcError?.message ?? "auth user still present after RPC";
+    await clearAuthDeleteBlockers(id, `Could not delete user (${why})`);
 
-    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
+    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(
+      id,
+      false
+    );
     if (authError) {
       throw new Error(
-        `Could not delete Auth user: ${authError.message} (RPC: ${rpcError.message})`
+        `Could not delete Auth user: ${authError.message}${
+          rpcError ? ` (RPC: ${rpcError.message})` : ""
+        }`
       );
     }
   }
@@ -410,7 +560,10 @@ export async function deleteAuthUserOnly(id: string): Promise<void> {
 
   await clearAuthDeleteBlockers(id, "Could not delete Auth user");
 
-  const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
+  const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(
+    id,
+    false
+  );
   if (authError) {
     throw new Error(`Could not delete Auth user: ${authError.message}`);
   }
@@ -433,6 +586,8 @@ export async function deleteProfileOnly(id: string): Promise<void> {
   await requireServiceRole();
   const admin = await getCurrentAdmin();
   const label = await describeUser(id);
+
+  await clearProfileDeleteBlockers(id, "Could not delete profile");
 
   const { error } = await supabaseAdmin.from("profiles").delete().eq("id", id);
   if (error) throw new Error(`Could not delete profile: ${error.message}`);

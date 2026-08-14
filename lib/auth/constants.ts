@@ -14,3 +14,9 @@ export const LOGIN_RATE_LIMIT_EMAIL = 5;
 
 /** Rolling window for login rate limits (minutes). */
 export const LOGIN_RATE_LIMIT_WINDOW_MINUTES = 15;
+
+/** How long a remembered device stays signed in / trusted for MFA. */
+export const REMEMBER_DEVICE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+export const REMEMBER_DEVICE_COOKIE = "sterling_remember_device";
+export const DEVICE_TRUST_COOKIE = "sterling_device_trust";

@@ -8,10 +8,10 @@
 
 create table if not exists admin_invite_point_adjustments (
   id uuid primary key default gen_random_uuid(),
-  target_user_id uuid not null references profiles(id),
+  target_user_id uuid not null references profiles(id) on delete cascade,
   points_delta integer not null check (points_delta <> 0),
   reason text not null check (char_length(btrim(reason)) > 0),
-  created_by_admin_id uuid not null references profiles(id),
+  created_by_admin_id uuid not null references profiles(id) on delete cascade,
   created_at timestamptz not null default now()
 );
 

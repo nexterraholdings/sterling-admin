@@ -15,12 +15,10 @@ type AnalyticsClientProps = {
   statusCounts: Record<string, number>;
   postTypeEntries: [string, number][];
   marketEntries: [string, number][];
-  communityCategoryEntries: [string, number][];
   eventTypeEntries: [string, number][];
   totalUsers: number;
   totalReports: number;
   totalPosts: number;
-  totalCommunities: number;
   totalEvents: number;
   upcomingEvents: number;
   pastEvents: number;
@@ -184,8 +182,8 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
         </div>
       </div>
 
-      {/* Row 3: Post types + Markets + Communities + Event types */}
-      <div className="grid gap-6 xl:grid-cols-4">
+      {/* Row 3: Post types + Markets + Event types */}
+      <div className="grid gap-6 xl:grid-cols-3">
         {/* Post types */}
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-zinc-50">Post types</h3>
@@ -237,31 +235,6 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
               <p className="px-3 pt-1 text-xs text-zinc-500">
                 +{props.marketEntries.length - 10} more markets
               </p>
-            )}
-          </div>
-        </div>
-
-        {/* Community categories */}
-        <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-zinc-50">Communities</h3>
-          <p className="mt-0.5 text-sm text-zinc-400">
-            {props.totalCommunities.toLocaleString()} total
-          </p>
-          <div className="mt-6 space-y-1">
-            {props.communityCategoryEntries.length > 0 ? (
-              props.communityCategoryEntries.map(([cat, count], i) => (
-                <ProgressRow
-                  key={cat}
-                  label={cat}
-                  count={count}
-                  percentage={props.totalCommunities > 0 ? Math.round((count / props.totalCommunities) * 100) : 0}
-                  color={listPalette[i % listPalette.length]}
-                />
-              ))
-            ) : (
-              <div className="flex h-24 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
-                No communities yet
-              </div>
             )}
           </div>
         </div>

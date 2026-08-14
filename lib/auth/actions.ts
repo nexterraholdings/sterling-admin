@@ -13,6 +13,14 @@ import { checkLoginRateLimit } from "@/lib/auth/login-rate-limit";
 import { getStaffMfaState } from "@/lib/auth/mfa";
 import { getRequestClientMeta } from "@/lib/auth/request-meta";
 import { logSecurityEvent } from "@/lib/auth/security-audit";
+import { getAuthUser } from "@/lib/auth/get-auth-user";
+import {
+  clearRememberedDevice,
+  hasTrustedDevice,
+  persistDeviceTrust,
+  readRememberPreference,
+  writeRememberPreference,
+} from "@/lib/auth/device-trust";
 
 export type LoginState = { error: string } | undefined;
 export type MfaActionState = { error?: string; qrCode?: string; secret?: string; factorId?: string } | undefined;
@@ -27,18 +35,24 @@ async function assertStaffUser(userId: string) {
   return !!profile && (STAFF_ROLES as readonly string[]).includes(profile.account_role);
 }
 
-async function redirectAfterStaffAuth(supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>) {
+async function redirectAfterStaffAuth(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  remember: boolean
+) {
   const mfaState = await getStaffMfaState(supabase);
-  if (mfaState.status !== "ok") {
+  if (mfaState.status !== "ok" && !(await hasTrustedDevice(userId))) {
     redirect(MFA_REQUIRED_PATH);
   }
 
+  await persistDeviceTrust(userId, remember);
   redirect("/dashboard");
 }
 
 export async function login(_prevState: LoginState, formData: FormData): Promise<LoginState> {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
+  const remember = formData.get("remember") === "1";
   const { ip, userAgent } = await getRequestClientMeta();
 
   if (!email || !password) {
@@ -57,7 +71,8 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
     return { error: SIGN_IN_RATE_LIMIT_MESSAGE };
   }
 
-  const supabase = await createSupabaseServerClient();
+  await writeRememberPreference(remember);
+  const supabase = await createSupabaseServerClient(remember);
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error || !data.user) {
@@ -91,21 +106,19 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
     userAgent,
     email,
     actorId: data.user.id,
-    outcome: "password_verified",
+    outcome: remember ? "password_verified_remember_device" : "password_verified",
   });
 
-  await redirectAfterStaffAuth(supabase);
+  await redirectAfterStaffAuth(supabase, data.user.id, remember);
 }
 
 export async function logout() {
   const supabase = await createSupabaseServerClient();
   const { ip, userAgent } = await getRequestClientMeta();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser(supabase);
 
   await supabase.auth.signOut();
+  await clearRememberedDevice();
 
   if (user) {
     await logSecurityEvent({
@@ -123,9 +136,7 @@ export async function logout() {
 
 export async function beginMfaEnroll(): Promise<MfaActionState> {
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser(supabase);
 
   if (!user || !(await assertStaffUser(user.id))) {
     redirect("/");
@@ -160,9 +171,7 @@ export async function completeMfaEnroll(
   }
 
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser(supabase);
 
   if (!user || !(await assertStaffUser(user.id))) {
     redirect("/");
@@ -182,6 +191,7 @@ export async function completeMfaEnroll(
     outcome: "totp_enrolled",
   });
 
+  await persistDeviceTrust(user.id, await readRememberPreference());
   redirect("/dashboard");
 }
 
@@ -198,9 +208,7 @@ export async function verifyMfaSignIn(
   }
 
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser(supabase);
 
   if (!user || !(await assertStaffUser(user.id))) {
     redirect("/");
@@ -220,5 +228,6 @@ export async function verifyMfaSignIn(
     outcome: "aal2",
   });
 
+  await persistDeviceTrust(user.id, await readRememberPreference());
   redirect("/dashboard");
 }

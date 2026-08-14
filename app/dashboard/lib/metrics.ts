@@ -14,7 +14,6 @@ export async function fetchDashboardMetrics() {
     modActionsRes,
     newUsersTodayRes,
     totalPostsRes,
-    totalCommunitiesRes,
     reportsWeekRes,
     usersWeekRes,
   ] = await Promise.all([
@@ -46,10 +45,6 @@ export async function fetchDashboardMetrics() {
       .select("id", { count: "exact", head: true }),
 
     supabaseAdmin
-      .from("communities")
-      .select("id", { count: "exact", head: true }),
-
-    supabaseAdmin
       .from("reports")
       .select("id", { count: "exact", head: true })
       .gte("created_at", weekAgo.toISOString()),
@@ -67,7 +62,6 @@ export async function fetchDashboardMetrics() {
     modActions:        modActionsRes.count    ?? 0,
     newUsersToday:     newUsersTodayRes.count ?? 0,
     totalPosts:        totalPostsRes.count    ?? 0,
-    totalCommunities:  totalCommunitiesRes.count ?? 0,
     reportsThisWeek:   reportsWeekRes.count   ?? 0,
     newUsersThisWeek:  usersWeekRes.count     ?? 0,
   };

@@ -138,13 +138,9 @@ export function DashboardOverviewClient({
                     <span className="font-medium text-zinc-300">
                       {metrics.activeUsers.toLocaleString()} users
                     </span>
-                    ,{" "}
+                    {" "}and{" "}
                     <span className="font-medium text-zinc-300">
                       {metrics.totalPosts.toLocaleString()} posts
-                    </span>
-                    , and{" "}
-                    <span className="font-medium text-zinc-300">
-                      {metrics.totalCommunities} communities
                     </span>
                     .
                   </>
@@ -230,7 +226,7 @@ export function DashboardOverviewClient({
               change=""
               tone="violet"
               icon={<Layers className="h-3.5 w-3.5" />}
-              subtitle={`${metrics.totalCommunities} communities`}
+              subtitle="all time"
             />
           </div>
         </div>

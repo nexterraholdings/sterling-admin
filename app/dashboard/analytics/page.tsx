@@ -50,7 +50,6 @@ export default async function AnalyticsPage() {
 
   const postTypeEntries = Object.entries(data.postTypeCounts).sort((a, b) => b[1] - a[1]);
   const marketEntries = Object.entries(data.marketCounts).sort((a, b) => b[1] - a[1]);
-  const communityCategoryEntries = Object.entries(data.communityCategories).sort((a, b) => b[1] - a[1]);
   const eventTypeEntries = Object.entries(data.eventTypeCounts).sort((a, b) => b[1] - a[1]);
 
   return (
@@ -65,7 +64,7 @@ export default async function AnalyticsPage() {
           </div>
           <h2 className="mt-2 text-2xl font-semibold text-zinc-50">Platform breakdown</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            Real-time distribution of users, reports, content, and communities across the platform.
+            Real-time distribution of users, reports, and content across the platform.
           </p>
         </div>
       </div>
@@ -88,12 +87,10 @@ export default async function AnalyticsPage() {
         statusCounts={data.statusCounts}
         postTypeEntries={postTypeEntries}
         marketEntries={marketEntries}
-        communityCategoryEntries={communityCategoryEntries}
         eventTypeEntries={eventTypeEntries}
         totalUsers={data.totalUsers}
         totalReports={data.totalReports}
         totalPosts={data.totalPosts}
-        totalCommunities={data.totalCommunities}
         totalEvents={data.totalEvents}
         upcomingEvents={data.upcomingEvents}
         pastEvents={data.pastEvents}

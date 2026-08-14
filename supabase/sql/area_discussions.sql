@@ -12,7 +12,7 @@
 
 create table if not exists area_discussions (
   id uuid primary key default gen_random_uuid(),
-  creator_id uuid not null references auth.users(id),
+  creator_id uuid not null references auth.users(id) on delete cascade,
   title text not null,
   description text,
   center_lat double precision not null,
@@ -34,9 +34,9 @@ create index if not exists area_discussions_created_at_idx on area_discussions (
 create table if not exists area_discussion_comments (
   id uuid primary key default gen_random_uuid(),
   discussion_id uuid not null references area_discussions(id) on delete cascade,
-  author_id uuid not null references auth.users(id),
+  author_id uuid not null references auth.users(id) on delete cascade,
   body text not null,
-  parent_id uuid references area_discussion_comments(id),
+  parent_id uuid references area_discussion_comments(id) on delete set null,
   likes_count integer not null default 0,
   created_at timestamptz not null default now()
 );
@@ -47,7 +47,7 @@ create index if not exists area_discussion_comments_author_id_idx on area_discus
 create table if not exists area_rates (
   id uuid primary key default gen_random_uuid(),
   discussion_id uuid not null references area_discussions(id) on delete cascade,
-  user_id uuid not null references auth.users(id),
+  user_id uuid not null references auth.users(id) on delete cascade,
   value numeric not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -61,7 +61,7 @@ create table if not exists area_rates (
 -- identifies those rows. If report_type is constrained by a check/enum in the
 -- live schema, that constraint needs to be widened separately — this migration
 -- only adds the column.
-alter table reports add column if not exists discussion_id uuid references area_discussions(id);
+alter table reports add column if not exists discussion_id uuid references area_discussions(id) on delete set null;
 
 alter table area_discussions enable row level security;
 alter table area_discussion_comments enable row level security;

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import logo from "@/assets/MobileAppLogo.png";
 import { login } from "@/lib/auth/actions";
@@ -9,9 +9,38 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+const EMAIL_STORAGE_KEY = "sterling_admin_email";
+const REMEMBER_STORAGE_KEY = "sterling_admin_remember_device";
+
 export function SignInScreen() {
   const [state, formAction, pending] = useActionState(login, undefined);
   const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState("");
+  const [remember, setRemember] = useState(true);
+
+  useEffect(() => {
+    try {
+      const savedEmail = localStorage.getItem(EMAIL_STORAGE_KEY);
+      const savedRemember = localStorage.getItem(REMEMBER_STORAGE_KEY);
+      if (savedEmail) setEmail(savedEmail);
+      if (savedRemember === "0") setRemember(false);
+    } catch {
+      // Ignore blocked storage (private mode, etc).
+    }
+  }, []);
+
+  function persistDevicePreference() {
+    try {
+      localStorage.setItem(REMEMBER_STORAGE_KEY, remember ? "1" : "0");
+      if (remember && email.trim()) {
+        localStorage.setItem(EMAIL_STORAGE_KEY, email.trim());
+      } else {
+        localStorage.removeItem(EMAIL_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore blocked storage.
+    }
+  }
 
   return (
     <main className="relative flex h-dvh max-h-dvh w-full items-center justify-center overflow-hidden bg-zinc-950 px-4">
@@ -31,7 +60,7 @@ export function SignInScreen() {
           <p className="mt-1.5 text-sm text-zinc-500">Sign in to continue</p>
         </div>
 
-        <form action={formAction} className="mt-8 space-y-4">
+        <form action={formAction} onSubmit={persistDevicePreference} className="mt-8 space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input
@@ -43,6 +72,8 @@ export function SignInScreen() {
               placeholder="you@company.com"
               disabled={pending}
               className="h-11"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
             />
           </div>
 
@@ -69,6 +100,26 @@ export function SignInScreen() {
               </button>
             </div>
           </div>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 px-3.5 py-3">
+            <input
+              type="checkbox"
+              name="remember"
+              value="1"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              disabled={pending}
+              className="mt-0.5 size-4 shrink-0 rounded border-zinc-600 bg-zinc-900 text-emerald-500 focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-zinc-200">
+                Remember this device
+              </span>
+              <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
+                Stay signed in for 30 days and skip authenticator codes on this browser.
+              </span>
+            </span>
+          </label>
 
           {state?.error ? (
             <p

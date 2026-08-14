@@ -2,14 +2,14 @@ import { redirect } from "next/navigation";
 import { STAFF_ROLES } from "@/app/dashboard/lib/dal";
 import { MfaScreen } from "@/components/auth/MfaScreen";
 import { getStaffMfaState } from "@/lib/auth/mfa";
+import { hasTrustedDevice } from "@/lib/auth/device-trust";
+import { getAuthUser } from "@/lib/auth/get-auth-user";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { supabaseAdmin } from "@/lib/supabase/server";
 
 export default async function MfaPage() {
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser(supabase);
 
   if (!user) redirect("/");
 
@@ -24,7 +24,7 @@ export default async function MfaPage() {
   }
 
   const mfaState = await getStaffMfaState(supabase);
-  if (mfaState.status === "ok") {
+  if (mfaState.status === "ok" || (await hasTrustedDevice(user.id))) {
     redirect("/dashboard");
   }
 

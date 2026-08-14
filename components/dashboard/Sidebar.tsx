@@ -20,25 +20,15 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { href: "/dashboard", label: "Overview", short: "OV", description: "Live platform pulse" },
       { href: "/dashboard/analytics", label: "Analytics", short: "AN", description: "Growth and quality trends" },
       { href: "/dashboard/audit-logs", label: "Audit Logs", short: "AL", description: "Admin activity history" },
-      { href: "/dashboard/news", label: "News", short: "NW", description: "Manage the daily news override" },
-      { href: "/dashboard/plans", label: "Plans", short: "PL", description: "Billing, comps, and brokerage Plus" },
+      { href: "/dashboard/plans", label: "Plans", short: "PL", description: "Billing, comps, and memberships" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app broadcast messages" },
       { href: "/dashboard/testing", label: "Testing", short: "QA", description: "QA tools for streaks and mobile flows" },
-    ],
-  },
-  {
-    label: "Commercial",
-    items: [
-      { href: "/dashboard/listings", label: "Listings & Deals", short: "LD", description: "Brokerage listings and hot deals" },
-      { href: "/dashboard/leads", label: "Leads", short: "LE", description: "Buyer/renter interest inbox" },
     ],
   },
   {
     label: "Community",
     items: [
       { href: "/dashboard/users", label: "Users", short: "US", description: "Profiles and cheats" },
-      { href: "/dashboard/communities", label: "Communities", short: "CM", description: "Groups, visibility, owners" },
-      { href: "/dashboard/events", label: "Events", short: "EV", description: "Meetups and gatherings" },
       { href: "/dashboard/discussions", label: "Hubs", short: "DS", description: "Area hubs and comments" },
       { href: "/dashboard/invite-points", label: "Invite Points", short: "IP", description: "Manually adjust referral points" },
     ],

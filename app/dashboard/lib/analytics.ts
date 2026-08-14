@@ -52,7 +52,6 @@ export async function fetchAnalytics() {
     profilesRes,
     reportsRes,
     postsRes,
-    communitiesRes,
     eventsRes,
     reportsWeekRes,
     profilesWeekRes,
@@ -73,11 +72,6 @@ export async function fetchAnalytics() {
     supabaseAdmin
       .from("posts")
       .select("post_type,likes_count,comments_count,created_at"),
-
-    // Communities
-    supabaseAdmin
-      .from("communities")
-      .select("category,members_count"),
 
     // Events
     supabaseAdmin
@@ -112,7 +106,6 @@ export async function fetchAnalytics() {
   const profiles = (profilesRes.data ?? []) as any[];
   const reports = (reportsRes.data ?? []) as any[];
   const posts = (postsRes.data ?? []) as any[];
-  const communities = (communitiesRes.data ?? []) as any[];
   const events = (eventsRes.data ?? []) as any[];
   const reportsWeek = (reportsWeekRes.data ?? []) as any[];
   const profilesWeek = (profilesWeekRes.data ?? []) as any[];
@@ -215,13 +208,6 @@ export async function fetchAnalytics() {
     ? (profiles.reduce((sum: number, p: any) => sum + (p.moderation_strike_count ?? 0), 0) / profiles.length).toFixed(1)
     : "0";
 
-  // ── Community stats ──
-  const communityCategories: Record<string, number> = {};
-  communities.forEach((c: any) => {
-    const cat = c.category ?? "uncategorized";
-    communityCategories[cat] = (communityCategories[cat] ?? 0) + 1;
-  });
-
   // ── Event stats ──
   const totalEvents = events.length;
   const upcomingEvents = events.filter((e: any) => e.starts_at && new Date(e.starts_at) >= now).length;
@@ -254,7 +240,6 @@ export async function fetchAnalytics() {
     totalUsers,
     totalReports,
     totalPosts,
-    totalCommunities: communities.length,
     roleDistribution,
     categoryBreakdown,
     statusCounts,
@@ -265,7 +250,6 @@ export async function fetchAnalytics() {
     userTrend,
     usersWithStrikes,
     avgStrikes,
-    communityCategories,
     totalEvents,
     upcomingEvents,
     pastEvents,

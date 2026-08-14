@@ -4,13 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import {
   fetchPosts,
   fetchProfileItems,
-  fetchCommunities,
   boostPostLikes,
   boostProfileConnections,
-  boostCommunityMembers,
   type PostItem,
   type ProfileItem,
-  type CommunityItem,
 } from "@/app/dashboard/cheats/actions";
 
 // ---------------------------------------------------------------------------
@@ -390,137 +387,11 @@ function ProfileCardSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
-// Community card
-// ---------------------------------------------------------------------------
-
-type CommunityPhase =
-  | { type: "idle" }
-  | { type: "panel" }
-  | { type: "saving" }
-  | { type: "done"; inserted: number }
-  | { type: "error"; msg: string };
-
-function CommunityCard({ community }: { community: CommunityItem }) {
-  const [phase, setPhase] = useState<CommunityPhase>({ type: "idle" });
-  const [total, setTotal] = useState(community.members_count);
-
-  async function handleConfirm(amount: number) {
-    setPhase({ type: "saving" });
-    try {
-      const { newCount, inserted } = await boostCommunityMembers(community.id, amount);
-      setTotal(newCount);
-      setPhase({ type: "done", inserted });
-      setTimeout(() => setPhase({ type: "idle" }), 3500);
-    } catch (e) {
-      setPhase({ type: "error", msg: e instanceof Error ? e.message : "Boost failed" });
-    }
-  }
-
-  const isBoosting = phase.type === "panel";
-  const isSaving   = phase.type === "saving";
-  const isDone     = phase.type === "done";
-  const displayName = community.name || "Untitled Community";
-
-  return (
-    <div
-      className={`rounded-2xl border bg-zinc-900 p-4 transition ${
-        isBoosting ? "border-amber-500/40 shadow-md" : "border-zinc-800 hover:border-zinc-700 hover:shadow-sm"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-zinc-50">{displayName}</p>
-          {community.description && (
-            <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{community.description}</p>
-          )}
-        </div>
-
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <div className="text-right">
-            <p className={`text-lg font-bold tabular-nums leading-none transition-colors ${isDone ? "text-emerald-400" : "text-zinc-50"}`}>
-              {total.toLocaleString()}
-            </p>
-            <p className="text-[10px] text-zinc-500">members</p>
-          </div>
-
-          {phase.type === "idle" && (
-            <button
-              onClick={() => setPhase({ type: "panel" })}
-              className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-300 transition hover:border-amber-500/50 hover:bg-amber-500/20"
-            >
-              ⚡ Boost
-            </button>
-          )}
-
-          {isSaving && (
-            <span className="flex items-center gap-1.5 text-[11px] text-amber-400">
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-400" />
-              Saving…
-            </span>
-          )}
-        </div>
-      </div>
-
-      {isBoosting && (
-        <BoostPanel
-          label="members"
-          onConfirm={handleConfirm}
-          onCancel={() => setPhase({ type: "idle" })}
-        />
-      )}
-
-      {isDone && (
-        <div className="mt-3 flex items-center gap-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
-          <span>✓</span>
-          <p className="text-xs font-semibold text-emerald-300">
-            +{(phase as { type: "done"; inserted: number }).inserted} members added · {total.toLocaleString()} total
-          </p>
-        </div>
-      )}
-
-      {phase.type === "error" && (
-        <div className="mt-3 flex items-center justify-between gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-          <p className="text-xs text-rose-300">{phase.msg}</p>
-          <button
-            onClick={() => setPhase({ type: "idle" })}
-            className="text-xs font-medium text-rose-400 underline"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Community card skeleton
-// ---------------------------------------------------------------------------
-
-function CommunityCardSkeleton() {
-  return (
-    <div className="animate-pulse rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="h-4 w-32 rounded bg-zinc-700" />
-          <div className="h-3 w-full rounded bg-zinc-700" />
-          <div className="h-3 w-3/4 rounded bg-zinc-700" />
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="h-6 w-10 rounded bg-zinc-700" />
-          <div className="h-6 w-16 rounded-full bg-zinc-700" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
 
 export function CheatsView() {
-  const [tab, setTab] = useState<"posts" | "profiles" | "communities">("posts");
+  const [tab, setTab] = useState<"posts" | "profiles">("posts");
   const [rawSearch, setRawSearch] = useState("");
   const [search, setSearch] = useState("");
 
@@ -529,9 +400,6 @@ export function CheatsView() {
 
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
-
-  const [communities, setCommunities] = useState<CommunityItem[]>([]);
-  const [communitiesLoading, setCommunitiesLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Debounce
@@ -564,23 +432,10 @@ export function CheatsView() {
       .finally(() => setProfilesLoading(false));
   }, []);
 
-  const loadCommunities = useCallback((q: string) => {
-    setCommunitiesLoading(true);
-    setLoadError(null);
-    fetchCommunities(q || undefined)
-      .then(setCommunities)
-      .catch((err) => {
-        setCommunities([]);
-        setLoadError(err instanceof Error ? err.message : "Failed to load communities");
-      })
-      .finally(() => setCommunitiesLoading(false));
-  }, []);
-
   useEffect(() => {
     if (tab === "posts") loadPosts(search);
-    else if (tab === "profiles") loadProfiles(search);
-    else if (tab === "communities") loadCommunities(search);
-  }, [search, tab, loadPosts, loadProfiles, loadCommunities]);
+    else loadProfiles(search);
+  }, [search, tab, loadPosts, loadProfiles]);
 
   useEffect(() => {
     if (profiles.length === 0 && !profilesLoading) {
@@ -588,7 +443,7 @@ export function CheatsView() {
     }
   }, [loadProfiles, profiles.length, profilesLoading]);
 
-  function switchTab(next: "posts" | "profiles" | "communities") {
+  function switchTab(next: "posts" | "profiles") {
     setTab(next);
     setRawSearch("");
     setSearch("");
@@ -631,17 +486,6 @@ export function CheatsView() {
             </svg>
             Profile Connections
           </button>
-          <button
-            onClick={() => switchTab("communities")}
-            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition ${
-              tab === "communities" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
-            }`}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
-              <path d="M15 14s1 0 1-1-1-4-5-4-5 3-5 4 1 1 1 1h8ZM6 14s1 0 1-1-1-4-5-4-5 3-5 4 1 1 1 1h8ZM5.978 11.167c.852.563 1.957.863 3.022.863 1.065 0 2.17-.3 3.022-.863" />
-            </svg>
-            Community Members
-          </button>
         </div>
 
         {/* Search */}
@@ -662,10 +506,8 @@ export function CheatsView() {
             type="text"
             placeholder={
               tab === "posts"
-                ? "Search by author, community, or content…"
-                : tab === "profiles"
-                ? "Search by name or username…"
-                : "Search by community name…"
+                ? "Search by author or content…"
+                : "Search by name or username…"
             }
             value={rawSearch}
             onChange={(e) => setRawSearch(e.target.value)}
@@ -695,31 +537,17 @@ export function CheatsView() {
                 </p>
               </div>
             ) : null
-          ) : tab === "profiles" ? (
-            profilesLoading ? (
-              Array.from({ length: 4 }).map((_, i) => <ProfileCardSkeleton key={i} />)
-            ) : profiles.length > 0 ? (
-              profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} />)
-            ) : !loadError ? (
-              <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60">
-                <p className="text-sm text-zinc-500">
-                  {rawSearch ? "No profiles match your search" : "No profiles found"}
-                </p>
-              </div>
-            ) : null
-          ) : (
-            communitiesLoading ? (
-              Array.from({ length: 4 }).map((_, i) => <CommunityCardSkeleton key={i} />)
-            ) : communities.length > 0 ? (
-              communities.map((community) => <CommunityCard key={community.id} community={community} />)
-            ) : !loadError ? (
-              <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60">
-                <p className="text-sm text-zinc-500">
-                  {rawSearch ? "No communities match your search" : "No communities found"}
-                </p>
-              </div>
-            ) : null
-          )}
+          ) : profilesLoading ? (
+            Array.from({ length: 4 }).map((_, i) => <ProfileCardSkeleton key={i} />)
+          ) : profiles.length > 0 ? (
+            profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} />)
+          ) : !loadError ? (
+            <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60">
+              <p className="text-sm text-zinc-500">
+                {rawSearch ? "No profiles match your search" : "No profiles found"}
+              </p>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

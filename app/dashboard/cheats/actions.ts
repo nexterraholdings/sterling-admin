@@ -24,14 +24,6 @@ export type ProfileItem = {
   connections_count: number;
 };
 
-export type CommunityItem = {
-  id: string;
-  name: string | null;
-  description: string | null;
-  members_count: number;
-  created_at: string | null;
-};
-
 function requireServiceRole(): void {
   if (supabaseAdminIsMock || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error(
@@ -123,31 +115,6 @@ export async function fetchProfileItems(search?: string): Promise<ProfileItem[]>
   }));
 }
 
-export async function fetchCommunities(search?: string): Promise<CommunityItem[]> {
-  await assertAdmin();
-  let query = supabaseAdmin
-    .from("communities")
-    .select("id,name,description,members_count,created_at")
-    .order("created_at", { ascending: false })
-    .limit(30);
-
-  if (search?.trim()) {
-    const term = escapeIlikeTerm(search.trim());
-    query = query.or(`name.ilike.%${term}%,description.ilike.%${term}%`);
-  }
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  return ((data ?? []) as any[]).map((c) => ({
-    id: c.id,
-    name: c.name ?? null,
-    description: c.description ?? null,
-    members_count: c.members_count ?? 0,
-    created_at: c.created_at ?? null,
-  }));
-}
-
 // ---------------------------------------------------------------------------
 // Boosts
 // ---------------------------------------------------------------------------
@@ -207,31 +174,4 @@ export async function boostProfileConnections(
   if (updateErr) throw new Error(updateErr.message);
 
   return { newCount: (count ?? 0) + nextFakeCount, inserted: safeAmount };
-}
-
-export async function boostCommunityMembers(
-  communityId: string,
-  amount: number
-): Promise<{ newCount: number; inserted: number }> {
-  await assertAdmin();
-  const safeAmount = Math.max(0, Math.floor(Number(amount) || 0));
-
-  const { data, error: fetchErr } = await supabaseAdmin
-    .from("communities")
-    .select("members_count")
-    .eq("id", communityId)
-    .single();
-
-  if (fetchErr) throw new Error(fetchErr.message);
-
-  const newCount = Number(data?.members_count ?? 0) + safeAmount;
-
-  const { error: updateErr } = await supabaseAdmin
-    .from("communities")
-    .update({ members_count: newCount })
-    .eq("id", communityId);
-
-  if (updateErr) throw new Error(updateErr.message);
-
-  return { newCount, inserted: safeAmount };
 }

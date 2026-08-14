@@ -27,6 +27,23 @@ import {
 
 const PAGE_SIZE = 20;
 
+function actionErrorMessage(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "digest" in error &&
+    typeof (error as { digest?: string }).digest === "string"
+  ) {
+    const digest = (error as { digest: string }).digest;
+    if (digest.startsWith("NEXT_REDIRECT") || digest.startsWith("NEXT_NOT_FOUND")) {
+      throw error;
+    }
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return "Delete failed. Try again, or check the server logs.";
+}
+
 // ---------------------------------------------------------------------------
 // Edit panel
 // ---------------------------------------------------------------------------
@@ -639,8 +656,8 @@ function EditUserPanel({
       if (target === "auth") {
         setShowDeleteForm(false);
       }
-    } catch (e: any) {
-      setDeleteError(e.message);
+    } catch (e: unknown) {
+      setDeleteError(actionErrorMessage(e));
     } finally {
       setDeleting(false);
     }
@@ -1219,8 +1236,8 @@ function AuthUserPanel({
       if (target === "profile") {
         setShowDeleteForm(false);
       }
-    } catch (e: any) {
-      setDeleteError(e.message);
+    } catch (e: unknown) {
+      setDeleteError(actionErrorMessage(e));
     } finally {
       setDeleting(false);
     }
@@ -1608,8 +1625,8 @@ function AuthUsersTable({
       } else {
         setShowBulkDelete(false);
       }
-    } catch (e: any) {
-      setBulkDeleteError(e.message);
+    } catch (e: unknown) {
+      setBulkDeleteError(actionErrorMessage(e));
     } finally {
       setBulkDeleting(false);
     }
@@ -1868,8 +1885,8 @@ function UsersTable({
       } else {
         setShowBulkDelete(false);
       }
-    } catch (e: any) {
-      setBulkDeleteError(e.message);
+    } catch (e: unknown) {
+      setBulkDeleteError(actionErrorMessage(e));
     } finally {
       setBulkDeleting(false);
     }

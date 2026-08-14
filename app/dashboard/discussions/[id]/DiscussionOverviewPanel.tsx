@@ -549,11 +549,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
               </Link>
             </li>
             <li>
-              <Link href="/dashboard/communities" className="text-emerald-400 hover:underline">
-                Communities admin
-              </Link>
-            </li>
-            <li>
               <Link href="/dashboard/moderation" className="text-emerald-400 hover:underline">
                 Moderation queue
               </Link>

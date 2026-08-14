@@ -3,14 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import {
-  fetchPlusCommunities,
-  fetchCommunities,
-  setCommunityIsPlus,
-} from "@/app/dashboard/communities/actions";
 import { searchUsers, type UserSearchResult } from "@/app/dashboard/invite-points/actions";
 import { setManualUserBilling, syncUserBillingFromRevenueCat } from "@/app/dashboard/plans/actions";
-import type { Community } from "@/lib/communities/types";
 import type {
   BillingEventsResponse,
   BillingListResponse,
@@ -50,20 +44,17 @@ const REFERENCE_PLANS = [
       'Free mobile icons',
       'Recover streaks free, 2× per week',
       'Up to 4 map hubs per month',
-      'Up to 6 map events per month',
+      'Up to 2 map events per month',
     ],
   },
   {
     id: 'sterling_premium',
     name: 'Sterling Premium',
-    tagline: 'For brokerages, teams, and local businesses',
+    tagline: 'For teams and local businesses',
     priceLabel: formatMembershipUsd(sterlingMembershipMonthlyPriceUsd('sterling_premium')),
     priceHint: 'per month',
     features: [
       'Unlimited map hubs & events',
-      'Unlimited business communities (brokerage)',
-      'Deals & property listings',
-      'Buyer leads & advanced listing analytics',
     ],
   },
 ];
@@ -554,7 +545,7 @@ function ManualUserBillingPanel({ onChanged }: { onChanged: () => void }) {
               className="mt-1.5"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="Support ticket, brokerage invoice, etc."
+              placeholder="Support ticket, invoice, etc."
             />
           </div>
           <Button disabled={busy} onClick={() => void apply()}>
@@ -588,110 +579,15 @@ function PlanReferenceCard({ plan }: { plan: (typeof REFERENCE_PLANS)[number] })
   );
 }
 
-function GrantPlusPanel({ onGranted }: { onGranted: () => void }) {
-  const [search, setSearch] = useState("");
-  const [results, setResults] = useState<Community[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [searchError, setSearchError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!search.trim()) {
-      setResults([]);
-      setSearchError(null);
-      return;
-    }
-    const t = setTimeout(async () => {
-      setLoading(true);
-      setSearchError(null);
-      try {
-        const { communities } = await fetchCommunities(1, search.trim());
-        setResults(communities.filter((c) => !c.is_plus));
-      } catch (err) {
-        setResults([]);
-        setSearchError(err instanceof Error ? err.message : "Community search failed");
-      } finally {
-        setLoading(false);
-      }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [search]);
-
-  async function grant(community: Community) {
-    const reason = window.prompt(`Reason for granting Plus to "${community.name}"?`) ?? undefined;
-    setBusyId(community.id);
-    try {
-      await setCommunityIsPlus(community.id, true, reason);
-      toast.success(`Granted Plus to ${community.name}`);
-      setResults((prev) => prev.filter((c) => c.id !== community.id));
-      onGranted();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to grant Plus");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  return (
-    <SectionCard title="Grant Plus" description="Search for a community to manually grant Plus/Premium status.">
-      <Input
-        value={search}
-        onChange={(e) => {
-          setSearch(e.target.value);
-          setSearchError(null);
-        }}
-        placeholder="Search communities by name…"
-        autoComplete="off"
-      />
-      {loading && <p className="mt-3 text-xs text-zinc-500">Searching…</p>}
-      {searchError && (
-        <div className="mt-3 rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{searchError}</div>
-      )}
-      {!loading && !searchError && results.length > 0 && (
-        <div className="mt-3 space-y-2">
-          {results.map((c) => (
-            <div
-              key={c.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2.5"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-zinc-200">{c.name ?? "Untitled"}</p>
-                <p className="text-xs text-zinc-500">{c.community_type === "brokerage" ? "Brokerage" : "Standard"}</p>
-              </div>
-              <Button size="sm" variant="outline" disabled={busyId === c.id} onClick={() => grant(c)}>
-                {busyId === c.id ? "Granting…" : "Grant Plus"}
-              </Button>
-            </div>
-          ))}
-        </div>
-      )}
-      {!loading && !searchError && search.trim() && results.length === 0 && (
-        <p className="mt-3 text-xs text-zinc-500">No matching communities without Plus already.</p>
-      )}
-    </SectionCard>
-  );
-}
-
 export function PlansView() {
-  const [communities, setCommunities] = useState<Community[]>([]);
   const [metrics, setMetrics] = useState<BillingMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const errors: string[] = [];
-
-    try {
-      const plusCommunities = await fetchPlusCommunities();
-      setCommunities(plusCommunities);
-    } catch (err) {
-      errors.push(err instanceof Error ? err.message : "Failed to load Plus communities");
-      setCommunities([]);
-    }
 
     try {
       const res = await fetch("/api/admin/billing?mode=metrics");
@@ -699,11 +595,10 @@ export function PlansView() {
       if (!res.ok) throw new Error(body.error ?? "Failed to load billing metrics");
       setMetrics(body);
     } catch (err) {
-      errors.push(err instanceof Error ? err.message : "Failed to load billing metrics");
+      setError(err instanceof Error ? err.message : "Failed to load billing metrics");
       setMetrics(null);
     }
 
-    if (errors.length > 0) setError(errors.join(" · "));
     setLoading(false);
   }, []);
 
@@ -716,20 +611,6 @@ export function PlansView() {
     load();
   }, [load]);
 
-  async function revoke(community: Community) {
-    const reason = window.prompt(`Reason for revoking Plus from "${community.name}"?`) ?? undefined;
-    setBusyId(community.id);
-    try {
-      await setCommunityIsPlus(community.id, false, reason);
-      toast.success(`Revoked Plus from ${community.name}`);
-      setCommunities((prev) => prev.filter((c) => c.id !== community.id));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to revoke Plus");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="relative overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
@@ -738,8 +619,7 @@ export function PlansView() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Command</p>
           <h1 className="mt-2 text-2xl font-semibold text-zinc-50 sm:text-3xl">Plans</h1>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
-            Live RevenueCat data, webhook audit, comp grants, and subscriber search. Manual community Plus grants
-            remain for brokerages that pay outside the app until Premium auto-links to communities.
+            Live RevenueCat data, webhook audit, comp grants, and subscriber search.
           </p>
         </div>
       </div>
@@ -778,52 +658,6 @@ export function PlansView() {
             <PlanReferenceCard key={plan.id} plan={plan} />
           ))}
         </div>
-      </SectionCard>
-
-      <GrantPlusPanel onGranted={refreshAll} />
-
-      <SectionCard
-        title="Communities with Plus"
-        description="Manually granted or (in the future) billing-granted Plus status, all in one place."
-      >
-        {error ? (
-          <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{error}</div>
-        ) : loading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="h-16 animate-pulse rounded-xl bg-zinc-800/60" />
-            ))}
-          </div>
-        ) : communities.length === 0 ? (
-          <EmptyState title="No communities have Plus yet" hint="Use the panel above to grant Plus to a brokerage." />
-        ) : (
-          <div className="space-y-2">
-            {communities.map((c) => (
-              <div
-                key={c.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Link href={`/dashboard/communities`} className="font-medium text-zinc-100 hover:text-emerald-300">
-                      {c.name ?? "Untitled"}
-                    </Link>
-                    <Badge variant={c.community_type === "brokerage" ? "violet" : "default"}>
-                      {c.community_type === "brokerage" ? "Brokerage" : "Standard"}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    {c.is_plus_source === "manual" ? "Manually granted" : "Granted via billing"}
-                    {c.is_plus_granted_at && ` · ${new Date(c.is_plus_granted_at).toLocaleDateString()}`}
-                  </p>
-                </div>
-                <Button size="sm" variant="destructive" disabled={busyId === c.id} onClick={() => revoke(c)}>
-                  {busyId === c.id ? "Revoking…" : "Revoke Plus"}
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
       </SectionCard>
     </div>
   );

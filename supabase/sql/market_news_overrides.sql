@@ -18,7 +18,7 @@ create table if not exists market_news_overrides (
   image_url text,
   published_at timestamptz,
   reason text,
-  created_by uuid references profiles(id),
+  created_by uuid references profiles(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

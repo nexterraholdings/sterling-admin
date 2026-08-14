@@ -1,6 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { MFA_REQUIRED_PATH } from "@/lib/auth/constants";
+import { MFA_REQUIRED_PATH, REMEMBER_DEVICE_COOKIE } from "@/lib/auth/constants";
+import { getAuthUser } from "@/lib/auth/get-auth-user";
+import {
+  applyRememberToAuthCookies,
+  expireSupabaseAuthCookies,
+  rememberDeviceEnabled,
+} from "@/lib/auth/session-cookies";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -9,10 +15,6 @@ const PROTECTED_PREFIX = "/dashboard";
 const LOGIN_PATH = "/";
 
 const AUTH_CACHE_HEADERS = ["cache-control", "pragma", "expires"] as const;
-
-function isAuthApiError(error: unknown): boolean {
-  return !!error && typeof error === "object" && "__isAuthError" in error;
-}
 
 function withSessionResponse(source: NextResponse, target: NextResponse) {
   source.cookies.getAll().forEach((cookie) => {
@@ -32,6 +34,9 @@ function withSessionResponse(source: NextResponse, target: NextResponse) {
 // app/dashboard/lib/dal.ts, close to the data it protects.
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
+  const persist = rememberDeviceEnabled(
+    request.cookies.get(REMEMBER_DEVICE_COOKIE)?.value
+  );
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -41,8 +46,9 @@ export async function updateSession(request: NextRequest) {
       setAll(cookiesToSet, headers) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         supabaseResponse = NextResponse.next({ request });
-        cookiesToSet.forEach(({ name, value, options }) =>
-          supabaseResponse.cookies.set(name, value, options)
+        applyRememberToAuthCookies(cookiesToSet, persist).forEach(
+          ({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
         );
         if (headers) {
           Object.entries(headers).forEach(([key, value]) =>
@@ -56,12 +62,11 @@ export async function updateSession(request: NextRequest) {
   // getUser() throws (rather than returning a null user) when the refresh
   // token cookie is stale/revoked, e.g. after a password reset or a
   // long-idle session. Treat that the same as "not signed in".
-  let user = null;
-  try {
-    ({ data: { user } } = await supabase.auth.getUser());
-  } catch (error) {
-    if (!isAuthApiError(error)) throw error;
-  }
+  const user = await getAuthUser(supabase, () => {
+    expireSupabaseAuthCookies(request.cookies.getAll(), (name, value, options) => {
+      supabaseResponse.cookies.set(name, value, options);
+    });
+  });
 
   const pathname = request.nextUrl.pathname;
   const isProtected = pathname.startsWith(PROTECTED_PREFIX);

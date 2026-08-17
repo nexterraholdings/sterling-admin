@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import {
   DEVICE_TRUST_COOKIE,
+  LOGIN_OK_COOKIE,
   REMEMBER_DEVICE_COOKIE,
   REMEMBER_DEVICE_MAX_AGE_SECONDS,
 } from "@/lib/auth/constants";
@@ -79,9 +80,25 @@ export async function hasTrustedDevice(userId: string): Promise<boolean> {
   return trustedUserIdFromValue(store.get(DEVICE_TRUST_COOKIE)?.value) === userId;
 }
 
+export async function persistLoginOk(userId: string, remember: boolean): Promise<void> {
+  const store = await cookies();
+  store.set(LOGIN_OK_COOKIE, createDeviceTrustValue(userId), cookieBaseOptions(remember));
+}
+
+export async function hasLoginOk(userId: string): Promise<boolean> {
+  const store = await cookies();
+  return trustedUserIdFromValue(store.get(LOGIN_OK_COOKIE)?.value) === userId;
+}
+
+export async function clearLoginOk(): Promise<void> {
+  const store = await cookies();
+  store.set(LOGIN_OK_COOKIE, "", { ...cookieBaseOptions(false), maxAge: 0 });
+}
+
 export async function clearRememberedDevice(): Promise<void> {
   const store = await cookies();
   const expired = { ...cookieBaseOptions(false), maxAge: 0 };
   store.set(REMEMBER_DEVICE_COOKIE, "", expired);
   store.set(DEVICE_TRUST_COOKIE, "", expired);
+  store.set(LOGIN_OK_COOKIE, "", expired);
 }

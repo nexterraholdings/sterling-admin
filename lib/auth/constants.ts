@@ -6,6 +6,9 @@ export const SIGN_IN_RATE_LIMIT_MESSAGE =
 
 export const MFA_REQUIRED_PATH = "/mfa";
 
+/** Signed cookie proving this session already passed password (or MFA) checks. */
+export const LOGIN_OK_COOKIE = "sterling_login_ok";
+
 /** Failed attempts allowed per IP inside the rolling window. */
 export const LOGIN_RATE_LIMIT_IP = 10;
 
@@ -15,7 +18,7 @@ export const LOGIN_RATE_LIMIT_EMAIL = 5;
 /** Rolling window for login rate limits (minutes). */
 export const LOGIN_RATE_LIMIT_WINDOW_MINUTES = 15;
 
-/** How long a remembered device stays signed in / trusted for MFA. */
+/** How long a remembered device stays signed in. */
 export const REMEMBER_DEVICE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 export const REMEMBER_DEVICE_COOKIE = "sterling_remember_device";

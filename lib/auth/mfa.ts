@@ -1,4 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  hasLoginOk,
+  hasTrustedDevice,
+  persistLoginOk,
+  readRememberPreference,
+} from "@/lib/auth/device-trust";
 
 export type StaffMfaState =
   | { status: "ok" }
@@ -42,4 +48,21 @@ export async function requireStaffMfaSession(
   supabase: SupabaseClient
 ): Promise<StaffMfaState> {
   return getStaffMfaState(supabase);
+}
+
+/** Password is enough unless this session still has a pending suspicious-login challenge. */
+export async function staffHasCompletedLoginChallenge(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<boolean> {
+  if (await hasLoginOk(userId)) return true;
+
+  // Pre-change sessions used the trusted-device cookie to skip MFA.
+  if (await hasTrustedDevice(userId)) {
+    await persistLoginOk(userId, await readRememberPreference());
+    return true;
+  }
+
+  const mfaState = await getStaffMfaState(supabase);
+  return mfaState.status === "ok";
 }

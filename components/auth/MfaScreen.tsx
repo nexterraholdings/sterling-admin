@@ -59,15 +59,15 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
 
         <div className="mt-8">
           <p className="text-xs font-semibold uppercase tracking-[0.28em] text-emerald-400/90">
-            {mode === "enroll" ? "Set up required" : "Verify identity"}
+            Unusual sign-in
           </p>
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-50">
             {mode === "enroll" ? "Add an authenticator app" : "Enter your authenticator code"}
           </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-400">
             {mode === "enroll"
-              ? "Admin access requires a TOTP authenticator app such as 1Password, Authy, or Google Authenticator."
-              : "Enter the 6-digit code from your authenticator app to continue to the dashboard."}
+              ? "This sign-in looks unusual, so a TOTP authenticator app such as 1Password, Authy, or Google Authenticator is required before continuing."
+              : "This sign-in looks unusual. Enter the 6-digit code from your authenticator app to continue to the dashboard."}
           </p>
         </div>
 

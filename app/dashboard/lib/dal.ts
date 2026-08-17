@@ -2,9 +2,8 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { MFA_REQUIRED_PATH } from "@/lib/auth/constants";
-import { hasTrustedDevice } from "@/lib/auth/device-trust";
 import { getAuthUser } from "@/lib/auth/get-auth-user";
-import { getStaffMfaState } from "@/lib/auth/mfa";
+import { staffHasCompletedLoginChallenge } from "@/lib/auth/mfa";
 
 export const STAFF_ROLES = ["owner", "admin", "moderator"] as const;
 export type StaffRole = (typeof STAFF_ROLES)[number];
@@ -39,8 +38,7 @@ export async function getCurrentAdmin(): Promise<CurrentAdmin> {
     redirect("/");
   }
 
-  const mfaState = await getStaffMfaState(supabase);
-  if (mfaState.status !== "ok" && !(await hasTrustedDevice(user.id))) {
+  if (!(await staffHasCompletedLoginChallenge(supabase, user.id))) {
     redirect(MFA_REQUIRED_PATH);
   }
 

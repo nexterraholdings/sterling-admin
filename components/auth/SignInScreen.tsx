@@ -116,7 +116,7 @@ export function SignInScreen() {
                 Remember this device
               </span>
               <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
-                Stay signed in for 30 days and skip authenticator codes on this browser.
+                Stay signed in for 30 days on this browser.
               </span>
             </span>
           </label>

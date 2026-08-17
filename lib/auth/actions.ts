@@ -13,11 +13,13 @@ import { checkLoginRateLimit } from "@/lib/auth/login-rate-limit";
 import { getStaffMfaState } from "@/lib/auth/mfa";
 import { getRequestClientMeta } from "@/lib/auth/request-meta";
 import { logSecurityEvent } from "@/lib/auth/security-audit";
+import { evaluateLoginSuspicion } from "@/lib/auth/suspicious-login";
 import { getAuthUser } from "@/lib/auth/get-auth-user";
 import {
+  clearLoginOk,
   clearRememberedDevice,
-  hasTrustedDevice,
   persistDeviceTrust,
+  persistLoginOk,
   readRememberPreference,
   writeRememberPreference,
 } from "@/lib/auth/device-trust";
@@ -35,18 +37,28 @@ async function assertStaffUser(userId: string) {
   return !!profile && (STAFF_ROLES as readonly string[]).includes(profile.account_role);
 }
 
+async function completeStaffLogin(userId: string, remember: boolean) {
+  await persistLoginOk(userId, remember);
+  await persistDeviceTrust(userId, remember);
+  redirect("/dashboard");
+}
+
 async function redirectAfterStaffAuth(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   userId: string,
-  remember: boolean
+  remember: boolean,
+  suspicious: boolean
 ) {
-  const mfaState = await getStaffMfaState(supabase);
-  if (mfaState.status !== "ok" && !(await hasTrustedDevice(userId))) {
-    redirect(MFA_REQUIRED_PATH);
+  if (suspicious) {
+    await clearLoginOk();
+    await persistDeviceTrust(userId, false);
+    const mfaState = await getStaffMfaState(supabase);
+    if (mfaState.status !== "ok") {
+      redirect(MFA_REQUIRED_PATH);
+    }
   }
 
-  await persistDeviceTrust(userId, remember);
-  redirect("/dashboard");
+  await completeStaffLogin(userId, remember);
 }
 
 export async function login(_prevState: LoginState, formData: FormData): Promise<LoginState> {
@@ -100,16 +112,29 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
     return { error: SIGN_IN_FAILED_MESSAGE };
   }
 
+  const suspicion = await evaluateLoginSuspicion({
+    userId: data.user.id,
+    ip,
+    email,
+  });
+
   await logSecurityEvent({
     action: "login_success",
     ip,
     userAgent,
     email,
     actorId: data.user.id,
-    outcome: remember ? "password_verified_remember_device" : "password_verified",
+    outcome: suspicion.suspicious
+      ? remember
+        ? "password_verified_suspicious_remember_device"
+        : "password_verified_suspicious"
+      : remember
+        ? "password_verified_remember_device"
+        : "password_verified",
+    note: suspicion.reasons.join(",") || undefined,
   });
 
-  await redirectAfterStaffAuth(supabase, data.user.id, remember);
+  await redirectAfterStaffAuth(supabase, data.user.id, remember, suspicion.suspicious);
 }
 
 export async function logout() {
@@ -191,8 +216,7 @@ export async function completeMfaEnroll(
     outcome: "totp_enrolled",
   });
 
-  await persistDeviceTrust(user.id, await readRememberPreference());
-  redirect("/dashboard");
+  await completeStaffLogin(user.id, await readRememberPreference());
 }
 
 export async function verifyMfaSignIn(
@@ -228,6 +252,5 @@ export async function verifyMfaSignIn(
     outcome: "aal2",
   });
 
-  await persistDeviceTrust(user.id, await readRememberPreference());
-  redirect("/dashboard");
+  await completeStaffLogin(user.id, await readRememberPreference());
 }

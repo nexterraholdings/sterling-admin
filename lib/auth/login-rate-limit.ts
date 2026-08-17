@@ -39,6 +39,13 @@ async function countRecentLoginFailures(filter: {
   return count ?? 0;
 }
 
+export async function hasRecentFailedLogins(email: string): Promise<boolean> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return false;
+  // A single typo should not trigger an authenticator challenge.
+  return (await countRecentLoginFailures({ email: normalizedEmail })) >= 2;
+}
+
 export async function checkLoginRateLimit(params: {
   ip: string;
   email: string;

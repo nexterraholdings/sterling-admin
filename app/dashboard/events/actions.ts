@@ -1,7 +1,7 @@
 "use server";
 
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 
 const PAGE_SIZE = 20;
@@ -82,7 +82,7 @@ export async function fetchEvents(
   search = "",
   filter: EventFilter = "upcoming"
 ): Promise<{ events: EventItem[]; totalCount: number }> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const offset = (page - 1) * PAGE_SIZE;
@@ -119,7 +119,7 @@ export async function fetchEvents(
 }
 
 export async function fetchEventById(id: string): Promise<EventItem | null> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const { data, error } = await supabaseAdmin
@@ -136,7 +136,7 @@ export async function fetchEventById(id: string): Promise<EventItem | null> {
 }
 
 export async function fetchEventCounts(): Promise<{ upcoming: number; past: number }> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const now = new Date().toISOString();
@@ -153,7 +153,7 @@ export async function fetchEventCounts(): Promise<{ upcoming: number; past: numb
 }
 
 export async function fetchEventAttendees(eventId: string): Promise<EventAttendee[]> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const { data, error } = await supabaseAdmin
@@ -201,7 +201,7 @@ export async function updateEvent(
     notes?: string | null;
   }
 ): Promise<void> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const { error } = await supabaseAdmin.from("events").update(updates).eq("id", id);
@@ -209,7 +209,7 @@ export async function updateEvent(
 }
 
 export async function deleteEvent(id: string): Promise<void> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const { data: before, error: fetchError } = await supabaseAdmin
@@ -234,7 +234,7 @@ export async function deleteEvent(id: string): Promise<void> {
 }
 
 export async function removeEventAttendee(eventId: string, userId: string): Promise<void> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const { error } = await supabaseAdmin

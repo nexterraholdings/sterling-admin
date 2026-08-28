@@ -1,7 +1,7 @@
 "use server";
 
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import { sanitizeStoredArticleContent } from "@/lib/news/articleTextCleanup";
 import { buildStoredArticleContent } from "@/lib/news/articleContentStorage";
@@ -111,7 +111,7 @@ export async function addMarket(params: { state: string }): Promise<Market> {
 }
 
 export async function deleteMarket(params: { state: string }): Promise<void> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const stateNorm = normalize(normalizeStateAbbreviation(params.state));
 
   const { error: overridesError } = await supabaseAdmin
@@ -366,7 +366,7 @@ export async function fetchFullArticlePreview(params: {
   url: string;
   title: string;
 }): Promise<FullArticlePreviewResult> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
 
   const url = params.url?.trim();
   const title = params.title?.trim();
@@ -423,7 +423,7 @@ export async function saveOverride(params: {
   candidate: NewsCandidate;
   reason?: string;
 }): Promise<NewsOverride> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const state = normalizeStateAbbreviation(params.state);
   if (!state) throw new Error("State is required");
   const stateNorm = normalize(state);
@@ -532,7 +532,7 @@ export async function clearOverride(params: {
   dateUtc: string;
   state: string;
 }): Promise<void> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const stateNorm = normalize(normalizeStateAbbreviation(params.state));
 
   const { error } = await supabaseAdmin

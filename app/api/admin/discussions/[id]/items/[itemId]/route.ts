@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 
 const TABLE_BY_KIND: Record<string, string> = {
@@ -15,7 +15,7 @@ const TABLE_BY_KIND: Record<string, string> = {
 type Ctx = { params: Promise<{ id: string; itemId: string }> };
 
 export async function DELETE(req: NextRequest, { params }: Ctx) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id, itemId } = await params;
   const kind = req.nextUrl.searchParams.get("kind") ?? "";
   const table = TABLE_BY_KIND[kind];
@@ -49,7 +49,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id, itemId } = await params;
   const kind = req.nextUrl.searchParams.get("kind") ?? "";
   if (kind !== "live_chat") {

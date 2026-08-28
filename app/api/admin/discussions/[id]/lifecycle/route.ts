@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import { isAdminDiscussionLifecycleStatus } from "@/lib/discussions/lifecycle";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 async function logMutation(
-  admin: Awaited<ReturnType<typeof getCurrentAdmin>>,
+  admin: Awaited<ReturnType<typeof requireAdmin>>,
   id: string,
   action: string,
   detail: string
@@ -24,7 +24,7 @@ async function logMutation(
 }
 
 export async function POST(req: NextRequest, { params }: Ctx) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
   let body: { status?: string; reason?: string } = {};
   try {

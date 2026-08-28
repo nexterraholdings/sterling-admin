@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import {
   fetchOverride,
   saveOverride,
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "state is required" }, { status: 400 });
   }
 
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
 
   try {
     const override = await fetchOverride({
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
 
   const body = await req.json();
   const { date_utc, state, reason, ...candidateFields } = body ?? {};
@@ -63,7 +63,7 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
 
   const { searchParams } = new URL(req.url);
   const state = searchParams.get("state");

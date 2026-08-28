@@ -736,7 +736,7 @@ function EditUserPanel({
               />
             </Field>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Account role">
+              <Field label="App role">
                 <select
                   className={selectCls}
                   value={form.account_role}

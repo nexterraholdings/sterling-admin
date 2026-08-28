@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
-import type { CommunityStub, DiscussionRow, LiveSessionRow, ProfileStub } from "@/lib/discussions/types";
+import type { DiscussionRow, LiveSessionRow, ProfileStub } from "@/lib/discussions/types";
 
 export type ReverseGeocodedAddress = {
   display_name: string;
@@ -60,7 +60,7 @@ type ReportRow = {
 };
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
 
   try {
@@ -74,7 +74,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const d = discussion as DiscussionRow;
 
-    const [commentsRes, ratesRes, reportsRes, sessionsRes, communityRes, address, claimsRes] =
+    const [commentsRes, ratesRes, reportsRes, sessionsRes, address, claimsRes] =
       await Promise.all([
         supabaseAdmin
           .from("area_discussion_comments")
@@ -94,9 +94,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           .eq("discussion_id", id)
           .order("started_at", { ascending: false })
           .limit(50),
-        d.community_id
-          ? supabaseAdmin.from("communities").select("id,name").eq("id", d.community_id).maybeSingle()
-          : Promise.resolve({ data: null, error: null }),
         reverseGeocode(d.center_lat, d.center_lng),
         supabaseAdmin
           .from("discussion_stewardship_claims")
@@ -109,14 +106,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (ratesRes.error) throw new Error(ratesRes.error.message);
     if (reportsRes.error) throw new Error(reportsRes.error.message);
     if (sessionsRes.error) throw new Error(sessionsRes.error.message);
-    if (communityRes.error) throw new Error(communityRes.error.message);
 
     const comments = (commentsRes.data ?? []) as CommentRow[];
     const reports = (reportsRes.data ?? []) as ReportRow[];
     const liveSessions = (sessionsRes.data ?? []) as LiveSessionRow[];
-    const community: CommunityStub | null = communityRes.data
-      ? { id: String(communityRes.data.id), name: communityRes.data.name ?? null }
-      : null;
 
     const profileIds = [
       ...new Set([
@@ -144,7 +137,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       discussion: {
         ...d,
         creator: profileMap.get(d.creator_id) ?? null,
-        community,
         auto_share_updates: Boolean(d.auto_share_updates),
         auto_share_feed: Boolean(d.auto_share_feed),
       },
@@ -167,7 +159,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
 
   let body: Record<string, unknown>;
@@ -234,7 +226,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
 
   let resolveReports = true;

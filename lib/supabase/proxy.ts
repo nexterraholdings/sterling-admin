@@ -30,7 +30,7 @@ function withSessionResponse(source: NextResponse, target: NextResponse) {
 }
 
 // Optimistic auth check for proxy.ts: only reads/refreshes the session
-// cookie, no database round-trip. The real account_role check happens in
+// cookie, no database round-trip. The real sterling_admins check happens in
 // app/dashboard/lib/dal.ts, close to the data it protects.
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });

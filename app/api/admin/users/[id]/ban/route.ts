@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
 
 // Thin wrapper around the same admin_ban_user RPC app/dashboard/moderation/actions.ts
 // uses, exposed as a REST route for callers (like the discussions detail page) that
 // need to ban a user without pulling in the moderation server actions module.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
 
   const body = await req.json().catch(() => ({}));

@@ -1,10 +1,9 @@
 import { redirect } from "next/navigation";
-import { STAFF_ROLES } from "@/app/dashboard/lib/dal";
+import { fetchActiveSterlingAdminRole } from "@/app/dashboard/lib/dal";
 import { MfaScreen } from "@/components/auth/MfaScreen";
 import { getStaffMfaState, staffHasCompletedLoginChallenge } from "@/lib/auth/mfa";
 import { getAuthUser } from "@/lib/auth/get-auth-user";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
-import { supabaseAdmin } from "@/lib/supabase/server";
 
 export default async function MfaPage() {
   const supabase = await createSupabaseServerClient();
@@ -12,13 +11,7 @@ export default async function MfaPage() {
 
   if (!user) redirect("/");
 
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("account_role")
-    .eq("id", user.id)
-    .single();
-
-  if (!profile || !(STAFF_ROLES as readonly string[]).includes(profile.account_role)) {
+  if (!(await fetchActiveSterlingAdminRole(user.id))) {
     redirect("/");
   }
 

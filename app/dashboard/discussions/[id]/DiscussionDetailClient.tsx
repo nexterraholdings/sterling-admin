@@ -114,7 +114,6 @@ export function DiscussionDetailClient({ id }: { id: string }) {
                 <Avatar id={discussion.creator_id} person={discussion.creator} size="sm" />
                 {personLabel(discussion.creator)}
               </span>
-              {discussion.community?.name && <span>{discussion.community.name}</span>}
               {discussion.location_hint && <span>{discussion.location_hint}</span>}
               <span>Updated {formatRelativeTime(discussion.updated_at)}</span>
             </div>

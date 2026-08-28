@@ -2,7 +2,7 @@
 
 import { Expo, type ExpoPushMessage } from "expo-server-sdk";
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
-import { getCurrentAdmin, type CurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, MARKETING_ROLES, type CurrentAdmin } from "@/app/dashboard/lib/dal";
 import {
   buildRouteContext,
   validateRouteFields,
@@ -21,15 +21,9 @@ function requireServiceRole(): void {
   }
 }
 
-// Mass push/inbox broadcasts reach every user on the platform -- moderators
-// are staff, but that blast radius should require owner/admin, not the
-// moderator role (which is otherwise scoped to per-post/user moderation).
+// Mass push/inbox broadcasts reach every user on the platform.
 async function requireBroadcastAdmin(): Promise<CurrentAdmin> {
-  const admin = await getCurrentAdmin();
-  if (admin.accountRole !== "owner" && admin.accountRole !== "admin") {
-    throw new Error("Only owners and admins can send broadcast notifications");
-  }
-  return admin;
+  return requireAdmin(MARKETING_ROLES);
 }
 
 // Sent one-per-request (not batched via chunkPushNotifications) because Expo rejects
@@ -113,7 +107,7 @@ async function resolveInboxUserIds(): Promise<string[]> {
 }
 
 export async function fetchAudiencePreview(): Promise<AudiencePreview> {
-  await getCurrentAdmin();
+  await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
 
   const [pushTokens, inboxUserIds] = await Promise.all([resolvePushTokens(), resolveInboxUserIds()]);
@@ -382,7 +376,7 @@ function rowToTemplate(row: { id: string; name: string; body: string; created_at
 }
 
 export async function fetchTemplates(): Promise<NotificationTemplate[]> {
-  await getCurrentAdmin();
+  await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
 
   const { data, error } = await supabaseAdmin
@@ -397,7 +391,7 @@ export async function createTemplate(params: {
   name: string;
   message: string;
 }): Promise<NotificationTemplate> {
-  await getCurrentAdmin();
+  await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
 
   const name = params.name.trim();
@@ -417,7 +411,7 @@ export async function updateTemplate(
   id: string,
   params: { name: string; message: string }
 ): Promise<NotificationTemplate> {
-  await getCurrentAdmin();
+  await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
 
   const name = params.name.trim();
@@ -435,7 +429,7 @@ export async function updateTemplate(
 }
 
 export async function deleteTemplate(id: string): Promise<void> {
-  await getCurrentAdmin();
+  await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
 
   const { error } = await supabaseAdmin.from("notification_templates").delete().eq("id", id);

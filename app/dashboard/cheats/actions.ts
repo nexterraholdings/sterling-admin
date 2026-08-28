@@ -1,7 +1,7 @@
 "use server";
 
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,7 +37,7 @@ function escapeIlikeTerm(term: string): string {
 }
 
 async function assertAdmin(): Promise<void> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 }
 

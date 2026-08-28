@@ -72,7 +72,7 @@ function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly
       </h3>
 
       <p className="mt-1.5 line-clamp-1 text-sm text-zinc-500">
-        {[d.location_hint, d.community?.name].filter(Boolean).join(" · ") || "No location or community set"}
+        {d.location_hint || "No location hint"}
       </p>
 
       <div className="mt-4 flex items-center gap-3">
@@ -127,7 +127,7 @@ function DiscussionTable({
             <th className="px-4 py-3">Discussion</th>
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Creator</th>
-            <th className="px-4 py-3">Community</th>
+            <th className="px-4 py-3">Location</th>
             <th className="px-4 py-3 text-right">Comments</th>
             <th className="px-4 py-3 text-right">Rating</th>
           </tr>
@@ -139,7 +139,6 @@ function DiscussionTable({
                 <Link href={`/dashboard/discussions/${d.id}`} className="font-semibold text-zinc-100 hover:text-emerald-300">
                   {d.title}
                 </Link>
-                {d.location_hint && <p className="mt-0.5 truncate text-xs text-zinc-500">{d.location_hint}</p>}
               </td>
               <td className="px-4 py-3">
                 <div className="flex flex-wrap gap-1">
@@ -149,7 +148,7 @@ function DiscussionTable({
                 </div>
               </td>
               <td className="px-4 py-3 text-zinc-400">{personLabel(d.creator)}</td>
-              <td className="max-w-[8rem] truncate px-4 py-3 text-zinc-500">{d.community?.name ?? "—"}</td>
+              <td className="max-w-[8rem] truncate px-4 py-3 text-zinc-500">{d.location_hint ?? "—"}</td>
               <td className="px-4 py-3 text-right tabular-nums text-zinc-300">{d.comment_count}</td>
               <td className="px-4 py-3 text-right text-zinc-300">
                 {d.rate_count > 0 && d.avg_rate != null ? `★ ${d.avg_rate.toFixed(1)}` : "—"}
@@ -165,7 +164,6 @@ function DiscussionTable({
 export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
   const [search, setSearch] = useState("");
   const [city, setCity] = useState("");
-  const [communitySearch, setCommunitySearch] = useState("");
   const [creatorSearch, setCreatorSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -198,7 +196,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     });
     if (search.trim()) params.set("search", search.trim());
     if (city.trim()) params.set("city", city.trim());
-    if (communitySearch.trim()) params.set("community", communitySearch.trim());
     if (creatorSearch.trim()) params.set("creator", creatorSearch.trim());
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
@@ -226,7 +223,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
         setLoading(false);
         setLoadingMore(false);
       });
-  }, [search, city, communitySearch, creatorSearch, dateFrom, dateTo, lifecycleStatus, liveOnly, flaggedOnly, sort, page]);
+  }, [search, city, creatorSearch, dateFrom, dateTo, lifecycleStatus, liveOnly, flaggedOnly, sort, page]);
 
   useEffect(() => {
     setPage(1);
@@ -243,7 +240,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
   const hasActiveFilters = !!(
     search.trim() ||
     city.trim() ||
-    communitySearch.trim() ||
     creatorSearch.trim() ||
     dateFrom ||
     dateTo ||
@@ -254,7 +250,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
   function clearFilters() {
     setSearch("");
     setCity("");
-    setCommunitySearch("");
     setCreatorSearch("");
     setDateFrom("");
     setDateTo("");
@@ -328,19 +323,11 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
           onClick={() => setShowAdvanced((v) => !v)}
           className="mt-4 text-xs font-semibold text-emerald-400 hover:text-emerald-300"
         >
-          {showAdvanced ? "Hide advanced filters" : "More filters (community, creator, dates…)"}
+          {showAdvanced ? "Hide advanced filters" : "More filters (location, creator, dates…)"}
         </button>
 
         {showAdvanced && (
           <div className="mt-4 grid gap-3 border-t border-zinc-800 pt-4 sm:grid-cols-2 lg:grid-cols-3">
-            <FilterField label="Community name">
-              <input
-                {...filterInputProps()}
-                value={communitySearch}
-                onChange={(e) => { setCommunitySearch(e.target.value); setPage(1); }}
-                placeholder="Linked home community"
-              />
-            </FilterField>
             <FilterField label="Creator">
               <input
                 {...filterInputProps()}

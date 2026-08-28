@@ -1,0 +1,14 @@
+---
+description: Always deploy to Vercel as the nexterraholdings owner, never via GitHub commit webhooks
+alwaysApply: true
+---
+
+# Vercel deploys
+
+Hobby blocks GitHub pushes from `abezul-thefuture`. After any git push that should go live, create the production deployment with the Vercel CLI/API while logged in as **nexterraholdings** (do not wait for the GitHub webhook).
+
+- Admin production: project `sterlingadmin` (https://admin.sterlingtheapp.com), git `nexterraholdings/sterling-admin`
+- Also deploy twin project `sterling-admin` when shipping that repo
+- Landing production: project `frontendlandingsterling` (https://sterlingtheapp.com), git `nexterraholdings/sterlinglanding`
+
+Do not import the repo into a new Vercel account. Do not treat a blocked GitHub deploy as success.

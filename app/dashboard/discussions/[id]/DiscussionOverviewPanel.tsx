@@ -43,13 +43,10 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
   const [editDescription, setEditDescription] = useState(discussion.description ?? "");
   const lifecyclePhase = normalizeDiscussionLifecycleStatus(discussion.lifecycle_status);
   const isBootstrapPhase = lifecyclePhase === "bootstrap";
-  const [editLifecycle, setEditLifecycle] = useState(() =>
-    normalizeAdminLifecycleStatus(discussion.lifecycle_status),
-  );
+  const [editLifecycle, setEditLifecycle] = useState(lifecyclePhase);
   const [editLat, setEditLat] = useState(String(discussion.center_lat));
   const [editLng, setEditLng] = useState(String(discussion.center_lng));
   const [editHint, setEditHint] = useState(discussion.location_hint ?? "");
-  const [communityId, setCommunityId] = useState(discussion.community_id ?? "");
   const [autoShareUpdates, setAutoShareUpdates] = useState(discussion.auto_share_updates);
   const [autoShareFeed, setAutoShareFeed] = useState(discussion.auto_share_feed);
   const [busy, setBusy] = useState(false);
@@ -57,11 +54,10 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
   useEffect(() => {
     setEditTitle(discussion.title);
     setEditDescription(discussion.description ?? "");
-    setEditLifecycle(normalizeAdminLifecycleStatus(discussion.lifecycle_status));
+    setEditLifecycle(normalizeDiscussionLifecycleStatus(discussion.lifecycle_status));
     setEditLat(String(discussion.center_lat));
     setEditLng(String(discussion.center_lng));
     setEditHint(discussion.location_hint ?? "");
-    setCommunityId(discussion.community_id ?? "");
     setAutoShareUpdates(discussion.auto_share_updates);
     setAutoShareFeed(discussion.auto_share_feed);
   }, [discussion]);
@@ -118,10 +114,11 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
-      if (
-        !isBootstrapPhase
-        && editLifecycle !== normalizeAdminLifecycleStatus(discussion.lifecycle_status)
-      ) {
+      const currentLifecycle = normalizeDiscussionLifecycleStatus(discussion.lifecycle_status);
+      if (editLifecycle !== currentLifecycle) {
+        if (editLifecycle === "bootstrap") {
+          throw new Error("Starting up cannot be set from admin.");
+        }
         const life = await fetch(`/api/admin/discussions/${id}/lifecycle`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -260,35 +257,25 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
               <input {...filterInputProps()} value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={60} />
             </FilterField>
             <FilterField label="Lifecycle">
-              {isBootstrapPhase ? (
-                <>
-                  <p className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-200">
-                    {DISCUSSION_LIFECYCLE_LABELS.bootstrap}
-                  </p>
-                  <p className="mt-1.5 text-xs text-zinc-500">
-                    Creation phase — only set when someone creates a hub. Admins cannot move a hub back into this state.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <select
-                    {...filterInputProps()}
-                    value={editLifecycle}
-                    onChange={(e) =>
-                      setEditLifecycle(e.target.value as typeof editLifecycle)
-                    }
-                  >
-                    {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-1.5 text-xs text-zinc-500">
-                    {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.find((o) => o.value === editLifecycle)?.description}
-                  </p>
-                </>
-              )}
+              <select
+                {...filterInputProps()}
+                value={editLifecycle}
+                onChange={(e) => setEditLifecycle(normalizeDiscussionLifecycleStatus(e.target.value))}
+              >
+                {isBootstrapPhase && (
+                  <option value="bootstrap">{DISCUSSION_LIFECYCLE_LABELS.bootstrap}</option>
+                )}
+                {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-xs text-zinc-500">
+                {isBootstrapPhase
+                  ? "Creation phase. Choose Live (or another status) and save to leave Starting up. You cannot put a hub back into this state."
+                  : ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.find((o) => o.value === editLifecycle)?.description}
+              </p>
             </FilterField>
             <div className="flex items-end sm:col-span-1">
               <PrimaryButton disabled={busy} onClick={saveMetadata}>
@@ -429,29 +416,15 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
           </PrimaryButton>
         </DetailAccordion>
 
-        <DetailAccordion title="Community & sharing" summary="Home community link and auto-share toggles">
-          <FilterField label="Home community ID">
-            <input {...filterInputProps()} value={communityId} onChange={(e) => setCommunityId(e.target.value)} />
-          </FilterField>
-          {discussion.community && (
-            <p className="mb-3 text-xs text-zinc-500">
-              Current: <span className="text-zinc-300">{discussion.community.name}</span>
-            </p>
-          )}
-          <PrimaryButton
-            disabled={busy || !communityId.trim()}
-            onClick={() => postJson(`/api/admin/discussions/${id}/community`, { community_id: communityId.trim() })}
-          >
-            Reassign community
-          </PrimaryButton>
-          <div className="mt-6 space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
+        <DetailAccordion title="Sharing" summary="Auto-share toggles for this hub">
+          <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
             <label className="flex cursor-pointer items-center gap-3 text-sm text-zinc-300">
               <input type="checkbox" checked={autoShareUpdates} onChange={(e) => setAutoShareUpdates(e.target.checked)} />
-              Auto-share updates to linked community
+              Auto-share updates
             </label>
             <label className="flex cursor-pointer items-center gap-3 text-sm text-zinc-300">
               <input type="checkbox" checked={autoShareFeed} onChange={(e) => setAutoShareFeed(e.target.checked)} />
-              Auto-share feed posts to linked community
+              Auto-share feed posts
             </label>
             <PrimaryButton
               disabled={busy}

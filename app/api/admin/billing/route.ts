@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import type {
   BillingEventsResponse,
   BillingListResponse,
@@ -21,7 +21,7 @@ function requireServiceRole(): void {
 }
 
 export async function GET(req: NextRequest) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
 
   const { searchParams } = new URL(req.url);

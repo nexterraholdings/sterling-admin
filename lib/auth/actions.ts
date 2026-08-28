@@ -2,8 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
-import { supabaseAdmin } from "@/lib/supabase/server";
-import { STAFF_ROLES } from "@/app/dashboard/lib/dal";
+import { fetchActiveSterlingAdminRole } from "@/app/dashboard/lib/dal";
 import {
   MFA_REQUIRED_PATH,
   SIGN_IN_FAILED_MESSAGE,
@@ -28,13 +27,7 @@ export type LoginState = { error: string } | undefined;
 export type MfaActionState = { error?: string; qrCode?: string; secret?: string; factorId?: string } | undefined;
 
 async function assertStaffUser(userId: string) {
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("account_role")
-    .eq("id", userId)
-    .single();
-
-  return !!profile && (STAFF_ROLES as readonly string[]).includes(profile.account_role);
+  return (await fetchActiveSterlingAdminRole(userId)) !== null;
 }
 
 async function completeStaffLogin(userId: string, remember: boolean) {

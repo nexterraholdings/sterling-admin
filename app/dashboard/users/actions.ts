@@ -1,7 +1,7 @@
 "use server";
 
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
 import type { AuthUserRow, UserDeleteTarget, UserProfile } from "@/lib/types";
 
@@ -14,7 +14,7 @@ export async function fetchProfiles(
   filter: FetchFilter = {},
   search = ""
 ): Promise<{ profiles: UserProfile[]; totalCount: number }> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
 
   const offset = (page - 1) * PAGE_SIZE;
@@ -80,7 +80,7 @@ function normalizeProfile(profile: Record<string, unknown>): UserProfile {
 }
 
 export async function fetchProfileById(id: string): Promise<UserProfile | null> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
 
   const { data, error } = await supabaseAdmin
@@ -99,7 +99,7 @@ export async function fetchAuthUsers(
   page: number,
   search = ""
 ): Promise<{ users: AuthUserRow[]; totalCount: number }> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
 
   const offset = (page - 1) * PAGE_SIZE;
@@ -236,7 +236,7 @@ async function fetchAuthUsersViaAdminApi(
 export async function fetchProfileAuthPresence(
   ids: string[]
 ): Promise<string[]> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
   if (ids.length === 0) return [];
 
@@ -273,7 +273,7 @@ export async function updateProfile(
   id: string,
   updates: Partial<UserProfile>
 ): Promise<void> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
 
   const { data, error } = await supabaseAdmin
@@ -510,7 +510,20 @@ async function verifyAuthUserGone(id: string): Promise<void> {
 export async function deleteUserAccount(id: string): Promise<void> {
   await requireServiceRole();
 
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
+  if (id === admin.id) {
+    throw new Error("You cannot delete your own account");
+  }
+
+  const { data: targetAdmin } = await supabaseAdmin
+    .from("sterling_admins")
+    .select("user_id")
+    .eq("user_id", id)
+    .maybeSingle();
+  if (targetAdmin) {
+    throw new Error("Remove this person from sterling_admins before deleting their account");
+  }
+
   const label = await describeUser(id);
 
   // Prefer SQL RPC (drops owned hubs/communities, then DELETE auth.users).
@@ -555,7 +568,7 @@ export async function deleteUserAccount(id: string): Promise<void> {
 export async function deleteAuthUserOnly(id: string): Promise<void> {
   await requireServiceRole();
 
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const label = await describeUser(id);
 
   await clearAuthDeleteBlockers(id, "Could not delete Auth user");
@@ -584,7 +597,7 @@ export async function deleteAuthUserOnly(id: string): Promise<void> {
 /** Removes profiles row only — auth identity (if any) is left behind. */
 export async function deleteProfileOnly(id: string): Promise<void> {
   await requireServiceRole();
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const label = await describeUser(id);
 
   await clearProfileDeleteBlockers(id, "Could not delete profile");
@@ -622,7 +635,7 @@ export async function deleteUsersByTarget(
   ids: string[],
   target: UserDeleteTarget
 ): Promise<{ deleted: string[]; failed: Array<{ id: string; error: string }> }> {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   const deleted: string[] = [];

@@ -13,11 +13,6 @@ export type ProfileStub = {
   avatar_url: string | null;
 };
 
-export type CommunityStub = {
-  id: string;
-  name: string | null;
-};
-
 export type DiscussionRow = {
   id: string;
   creator_id: string;
@@ -44,7 +39,6 @@ export type DiscussionRow = {
   live_expires_at: string | null;
   live_last_go_live_at: string | null;
   live_cooldown_until: string | null;
-  community_id: string | null;
   auto_share_updates: boolean;
   auto_share_feed: boolean;
   steward_glow_until: string | null;
@@ -55,7 +49,6 @@ export type DiscussionRow = {
 
 export type DiscussionListItem = DiscussionRow & {
   creator: ProfileStub | null;
-  community: CommunityStub | null;
   report_count: number;
 };
 

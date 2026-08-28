@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireAdmin, ANALYST_ROLES } from "./dal";
 
 export type RoleDistribution = { name: string; count: number; percentage: number; color: string };
 export type CategoryBreakdown = { name: string; count: number; percentage: number; color: string };
@@ -44,6 +45,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export async function fetchAnalytics() {
+  await requireAdmin(ANALYST_ROLES);
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 
 const ACTIONS = new Set(["hide", "unhide", "pin", "unpin", "delete"]);
@@ -8,7 +8,7 @@ const ACTIONS = new Set(["hide", "unhide", "pin", "unpin", "delete"]);
 type Ctx = { params: Promise<{ id: string; commentId: string }> };
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id, commentId } = await params;
   let action = "";
   try {
@@ -46,7 +46,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: Ctx) {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(OPERATOR_ROLES);
   const { id, commentId } = await params;
 
   try {

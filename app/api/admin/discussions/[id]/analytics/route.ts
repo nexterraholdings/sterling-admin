@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import {
   mapDiscussionAnalyticsRow,
   mapDiscussionTrendRows,
@@ -9,7 +9,7 @@ import {
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: Ctx) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
 
   try {

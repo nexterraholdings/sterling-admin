@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import type { DiscussionHubTab } from "@/lib/discussions/types";
 
 const TABS = new Set<DiscussionHubTab>([
@@ -18,7 +18,7 @@ const TABS = new Set<DiscussionHubTab>([
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(req: NextRequest, { params }: Ctx) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
   const tab = (req.nextUrl.searchParams.get("tab") ?? "feed") as DiscussionHubTab;
   const offset = Math.max(0, Number(req.nextUrl.searchParams.get("offset") ?? "0") || 0);

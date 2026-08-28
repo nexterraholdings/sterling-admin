@@ -1,7 +1,7 @@
 "use server";
 
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, MARKETING_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import {
   isValidCustomTypeSlug,
@@ -24,7 +24,7 @@ function requireServiceRole(): void {
 }
 
 export async function listNotificationDefinitions(): Promise<NotificationTypeDefinition[]> {
-  await getCurrentAdmin();
+  await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
   const { data, error } = await supabaseAdmin
     .from("notification_type_definitions")
@@ -42,7 +42,7 @@ export async function createNotificationDefinition(params: {
   tap_destination: NotificationTapDestination;
   enabled?: boolean;
 }): Promise<NotificationTypeDefinition> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
   const type = normalizeCustomTypeSlug(params.typeSlug);
   if (!isValidCustomTypeSlug(type)) {
@@ -93,7 +93,7 @@ export async function updateNotificationDefinition(
     enabled: boolean;
   },
 ): Promise<NotificationTypeDefinition> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
   if (!NOTIFICATION_TAP_DESTINATIONS.includes(params.tap_destination)) {
     throw new Error("Invalid tap destination");
@@ -131,7 +131,7 @@ export async function updateNotificationDefinition(
 }
 
 export async function setNotificationDefinitionEnabled(id: string, enabled: boolean): Promise<void> {
-  const admin = await getCurrentAdmin();
+  const admin = await requireAdmin(MARKETING_ROLES);
   requireServiceRole();
   const { data, error } = await supabaseAdmin
     .from("notification_type_definitions")

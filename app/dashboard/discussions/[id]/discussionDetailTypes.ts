@@ -1,4 +1,4 @@
-import type { CommunityStub, DiscussionRow, LiveSessionRow, ProfileStub } from "@/lib/discussions/types";
+import type { DiscussionRow, LiveSessionRow, ProfileStub } from "@/lib/discussions/types";
 
 export type ReverseGeocodedAddress = {
   display_name: string;
@@ -12,7 +12,6 @@ export type ReverseGeocodedAddress = {
 
 export type DetailDiscussion = DiscussionRow & {
   creator: ProfileStub | null;
-  community: CommunityStub | null;
 };
 
 export type DetailComment = {

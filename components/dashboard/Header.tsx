@@ -29,7 +29,7 @@ export function Header({
       <div className="flex items-center gap-3">
         <div className="hidden text-right text-xs leading-tight md:block">
           <p className="font-medium text-zinc-300">{admin.email ?? admin.fullName ?? "Admin"}</p>
-          <p className="uppercase tracking-wider text-zinc-500">{admin.accountRole}</p>
+          <p className="uppercase tracking-wider text-zinc-500">{admin.role}</p>
         </div>
         <form action={logout}>
           <button

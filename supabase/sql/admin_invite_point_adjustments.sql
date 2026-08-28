@@ -32,9 +32,9 @@ create policy admin_invite_point_adjustments_select_admin
   to authenticated
   using (
     exists (
-      select 1 from profiles p
-      where p.id = auth.uid()
-        and p.account_role in ('admin', 'owner')
+      select 1 from public.sterling_admins a
+      where a.user_id = auth.uid()
+        and a.disabled_at is null
     )
   );
 
@@ -48,11 +48,12 @@ create policy admin_invite_point_adjustments_insert_admin
   on admin_invite_point_adjustments
   for insert
   to authenticated
-  with check (
+        with check (
     exists (
-      select 1 from profiles p
-      where p.id = auth.uid()
-        and p.account_role in ('admin', 'owner')
+      select 1 from public.sterling_admins a
+      where a.user_id = auth.uid()
+        and a.disabled_at is null
+        and a.role in ('owner', 'operator')
     )
     and created_by_admin_id = auth.uid()
   );
@@ -85,7 +86,6 @@ security definer
 set search_path = public
 as $$
 declare
-  v_admin_role text;
   v_new_count int;
   v_adjustment admin_invite_point_adjustments;
 begin
@@ -101,8 +101,12 @@ begin
   -- because RETURNS TABLE(id uuid, ...) implicitly declares an OUT variable named
   -- `id` in this function's scope — an unqualified `id` in a query would be
   -- ambiguous between that variable and profiles.id.
-  select p.account_role into v_admin_role from profiles p where p.id = p_admin_id;
-  if v_admin_role is null or v_admin_role not in ('admin', 'owner') then
+  if not exists (
+    select 1 from public.sterling_admins a
+    where a.user_id = p_admin_id
+      and a.disabled_at is null
+      and a.role in ('owner', 'operator')
+  ) then
     raise exception 'Only admins can adjust invite points';
   end if;
 

@@ -1,29 +1,20 @@
--- 1. In the Supabase dashboard: Authentication -> Users -> Add user,
---    create an account with your email + a password (or use one that
---    already exists in auth.users).
+-- Grant dashboard access to an auth user. Console login reads sterling_admins,
+-- not profiles.account_role.
 --
--- 2. Run this in the SQL editor, swapping in that email. Most Supabase
---    setups auto-create a profiles row via a trigger on signup, so this
---    UPDATE should be enough:
+-- 1. Authentication -> Users -> Add user (email + password), or use an existing auth user.
+-- 2. Run this, swapping in that email:
 
-update profiles
-set account_role = 'owner'
-where id = (select id from auth.users where email = 'YOUR_EMAIL_HERE');
+insert into public.sterling_admins (user_id, role)
+select id, 'owner'
+from auth.users
+where email = 'YOUR_EMAIL_HERE'
+on conflict (user_id) do update
+  set role = excluded.role,
+      disabled_at = null;
 
 -- 3. Check it worked:
 
-select id, email, account_role from profiles
-where id = (select id from auth.users where email = 'YOUR_EMAIL_HERE');
-
--- If step 3 returns 0 rows, there's no profiles row for that auth user
--- (no trigger, or it hasn't fired). Create one manually instead:
---
--- insert into profiles (id, email, account_role)
--- select id, email, 'owner'
--- from auth.users
--- where email = 'YOUR_EMAIL_HERE'
--- on conflict (id) do update set account_role = excluded.account_role;
---
--- If that insert errors on a NOT NULL column, tell me which one and I'll
--- adjust it — I don't have visibility into every column/constraint on
--- profiles from this repo.
+select a.user_id, u.email, a.role, a.disabled_at
+from public.sterling_admins a
+join auth.users u on u.id = a.user_id
+where u.email = 'YOUR_EMAIL_HERE';

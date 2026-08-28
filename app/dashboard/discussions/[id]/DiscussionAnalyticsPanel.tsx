@@ -16,10 +16,6 @@ import {
 } from "../discussionUi";
 import { formatDiscussionDate } from "./discussionDetailTypes";
 
-type DiscussionContext = DiscussionRow & {
-  community?: { id: string; name: string | null } | null;
-};
-
 function StatCard({
   label,
   value,
@@ -152,7 +148,7 @@ function ReachFunnel({ a }: { a: DiscussionAnalyticsPayload }) {
 
 type Props = {
   discussionId: string;
-  discussion: DiscussionContext;
+  discussion: DiscussionRow;
 };
 
 export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
@@ -274,7 +270,7 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
       </div>
 
       {(a.pollCount > 0 || a.pollVoteCount > 0) && (
-        <SectionCard title="Polls" description="Community input gathered in this hub.">
+        <SectionCard title="Polls" description="Polls created in this hub.">
           <p className="text-sm text-zinc-300">
             {a.pollCount} poll{a.pollCount !== 1 ? "s" : ""} · {a.pollVoteCount.toLocaleString()} total votes
           </p>
@@ -385,26 +381,6 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
           <StatCard label="Resources" value={a.resourcesCount.toLocaleString()} />
         </div>
       </SectionCard>
-
-      {a.communityDiscussionCount > 0 && discussion.community?.name && (
-        <SectionCard
-          title="Community context"
-          description={`Benchmarks across ${a.communityDiscussionCount} hub${
-            a.communityDiscussionCount !== 1 ? "s" : ""
-          } linked to ${discussion.community.name}.`}
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <StatCard
-              label="Avg views / hub"
-              value={Math.round(a.communityAvgViews).toLocaleString()}
-            />
-            <StatCard
-              label="Avg engagement / hub"
-              value={Math.round(a.communityAvgEngagement).toLocaleString()}
-            />
-          </div>
-        </SectionCard>
-      )}
 
       {a.reportCount > 0 && (
         <SectionCard title="Trust" description="Reports filed against this hub.">

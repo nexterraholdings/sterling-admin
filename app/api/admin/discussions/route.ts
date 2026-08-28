@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { getCurrentAdmin } from "@/app/dashboard/lib/dal";
+import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import type { DiscussionLifecycleStatus, DiscussionListItem } from "@/lib/discussions/types";
 import {
   ADMIN_DISCUSSION_LIFECYCLE_STATUSES,
@@ -18,12 +18,11 @@ const LIFECYCLE_STATUSES = new Set<DiscussionLifecycleStatus>([
 ]);
 
 export async function GET(req: NextRequest) {
-  await getCurrentAdmin();
+  await requireAdmin(OPERATOR_ROLES);
 
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search")?.trim() || null;
   const city = searchParams.get("city")?.trim() || null;
-  const communitySearch = searchParams.get("community")?.trim() || null;
   const creatorSearch = searchParams.get("creator")?.trim() || null;
   const dateFrom = searchParams.get("dateFrom") || null;
   const dateTo = searchParams.get("dateTo") || null;
@@ -43,7 +42,6 @@ export async function GET(req: NextRequest) {
     const { data, error } = await supabaseAdmin.rpc("admin_list_area_discussions", {
       p_search: search,
       p_location_hint: city,
-      p_community_search: communitySearch,
       p_creator_search: creatorSearch,
       p_date_from: dateFrom,
       p_date_to: dateTo,
@@ -64,7 +62,6 @@ export async function GET(req: NextRequest) {
       discussions?: Array<{
         discussion: Record<string, unknown>;
         creator: DiscussionListItem["creator"];
-        community: DiscussionListItem["community"];
         report_count: number;
       }>;
     };
@@ -72,7 +69,6 @@ export async function GET(req: NextRequest) {
     const discussions: DiscussionListItem[] = (payload.discussions ?? []).map((row) => ({
       ...(row.discussion as DiscussionListItem),
       creator: row.creator ?? null,
-      community: row.community ?? null,
       report_count: row.report_count ?? 0,
     }));
 

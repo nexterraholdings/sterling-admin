@@ -13,6 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+const GOOGLE_AUTHENTICATOR_IOS =
+  "https://apps.apple.com/app/google-authenticator/id388497605";
+const GOOGLE_AUTHENTICATOR_ANDROID =
+  "https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2";
+
 type MfaScreenProps = {
   mode: "enroll" | "verify";
   factorId?: string;
@@ -21,6 +26,7 @@ type MfaScreenProps = {
 export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
   const [enrollState, setEnrollState] = useState<MfaActionState>();
   const [isStartingEnroll, startEnrollTransition] = useTransition();
+  const [copied, setCopied] = useState(false);
   const [completeState, completeAction, completePending] = useActionState(completeMfaEnroll, undefined);
   const [verifyState, verifyAction, verifyPending] = useActionState(verifyMfaSignIn, undefined);
 
@@ -39,6 +45,17 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
     }
   }, [mode, enrollState, isStartingEnroll]);
 
+  async function copySecret() {
+    if (!secret) return;
+    try {
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-zinc-950 px-6 py-16">
       <div
@@ -53,7 +70,7 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
           </div>
           <div>
             <p className="text-sm font-semibold text-zinc-50">Sterling Admin</p>
-            <p className="text-xs text-zinc-500">Multi-factor authentication</p>
+            <p className="text-xs text-zinc-500">Google Authenticator</p>
           </div>
         </div>
 
@@ -62,17 +79,45 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
             Unusual sign-in
           </p>
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-50">
-            {mode === "enroll" ? "Add an authenticator app" : "Enter your authenticator code"}
+            {mode === "enroll" ? "Set up Google Authenticator" : "Enter your Google Authenticator code"}
           </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-400">
             {mode === "enroll"
-              ? "This sign-in looks unusual, so a TOTP authenticator app such as 1Password, Authy, or Google Authenticator is required before continuing."
-              : "This sign-in looks unusual. Enter the 6-digit code from your authenticator app to continue to the dashboard."}
+              ? "This sign-in looks unusual. Scan the QR code with Google Authenticator, then enter the 6-digit code to continue."
+              : "This sign-in looks unusual. Open Google Authenticator and enter the 6-digit code for Sterling Admin."}
           </p>
         </div>
 
+        {mode === "enroll" ? (
+          <ol className="mt-6 list-decimal space-y-2 pl-5 text-sm leading-6 text-zinc-400">
+            <li>
+              Install Google Authenticator from the{" "}
+              <a
+                href={GOOGLE_AUTHENTICATOR_IOS}
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-300 underline-offset-4 hover:underline"
+              >
+                App Store
+              </a>{" "}
+              or{" "}
+              <a
+                href={GOOGLE_AUTHENTICATOR_ANDROID}
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-300 underline-offset-4 hover:underline"
+              >
+                Google Play
+              </a>
+              .
+            </li>
+            <li>Tap + and choose Scan a QR code.</li>
+            <li>Enter the 6-digit code shown for Sterling Admin.</li>
+          </ol>
+        ) : null}
+
         {mode === "enroll" && isStartingEnroll && !qrCode ? (
-          <p className="mt-8 text-sm text-zinc-500">Preparing your authenticator setup…</p>
+          <p className="mt-8 text-sm text-zinc-500">Preparing your Google Authenticator setup…</p>
         ) : null}
 
         {mode === "enroll" && qrCode ? (
@@ -80,12 +125,21 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
             <div className="mx-auto flex max-w-[220px] justify-center rounded-2xl bg-white p-4">
               {/* Supabase returns an SVG data URI for the TOTP QR code. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={qrCode} alt="Authenticator QR code" className="h-auto w-full" />
+              <img src={qrCode} alt="Google Authenticator QR code" className="h-auto w-full" />
             </div>
             {secret ? (
-              <p className="break-all text-center font-mono text-xs text-zinc-500">
-                Manual entry key: {secret}
-              </p>
+              <div className="space-y-2 text-center">
+                <p className="break-all font-mono text-xs text-zinc-500">
+                  Can’t scan? Enter this key in Google Authenticator: {secret}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void copySecret()}
+                  className="text-xs font-medium text-emerald-300 underline-offset-4 hover:underline"
+                >
+                  {copied ? "Copied" : "Copy setup key"}
+                </button>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -98,7 +152,7 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
             <input type="hidden" name="factorId" value={activeFactorId} />
 
             <div className="space-y-2">
-              <Label htmlFor="code">Authenticator code</Label>
+              <Label htmlFor="code">Google Authenticator code</Label>
               <Input
                 id="code"
                 name="code"

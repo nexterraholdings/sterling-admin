@@ -159,6 +159,19 @@ export async function logout() {
   redirect("/");
 }
 
+async function unenrollUnverifiedTotpFactors(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>
+) {
+  const { data: factors } = await supabase.auth.mfa.listFactors();
+  const unverified =
+    factors?.all?.filter(
+      (factor) => factor.factor_type === "totp" && factor.status === "unverified"
+    ) ?? [];
+  await Promise.all(
+    unverified.map((factor) => supabase.auth.mfa.unenroll({ factorId: factor.id }))
+  );
+}
+
 export async function beginMfaEnroll(): Promise<MfaActionState> {
   const supabase = await createSupabaseServerClient();
   const user = await getAuthUser(supabase);
@@ -167,13 +180,16 @@ export async function beginMfaEnroll(): Promise<MfaActionState> {
     redirect("/");
   }
 
+  await unenrollUnverifiedTotpFactors(supabase);
+
   const { data, error } = await supabase.auth.mfa.enroll({
     factorType: "totp",
-    friendlyName: "Sterling Admin",
+    friendlyName: "Google Authenticator",
+    issuer: "Sterling Admin",
   });
 
   if (error || !data?.totp) {
-    return { error: "Could not start authenticator setup. Try again." };
+    return { error: "Could not start Google Authenticator setup. Try again." };
   }
 
   return {
@@ -192,7 +208,7 @@ export async function completeMfaEnroll(
   const { ip, userAgent } = await getRequestClientMeta();
 
   if (!factorId || !code) {
-    return { error: "Enter the 6-digit code from your authenticator app." };
+    return { error: "Enter the 6-digit code from Google Authenticator." };
   }
 
   const supabase = await createSupabaseServerClient();
@@ -204,7 +220,7 @@ export async function completeMfaEnroll(
 
   const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code });
   if (error) {
-    return { error: "Invalid code. Check your authenticator app and try again." };
+    return { error: "Invalid code. Check Google Authenticator and try again." };
   }
 
   await logSecurityEvent({
@@ -228,7 +244,7 @@ export async function verifyMfaSignIn(
   const { ip, userAgent } = await getRequestClientMeta();
 
   if (!factorId || !code) {
-    return { error: "Enter the 6-digit code from your authenticator app." };
+    return { error: "Enter the 6-digit code from Google Authenticator." };
   }
 
   const supabase = await createSupabaseServerClient();
@@ -240,7 +256,7 @@ export async function verifyMfaSignIn(
 
   const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code });
   if (error) {
-    return { error: "Invalid code. Check your authenticator app and try again." };
+    return { error: "Invalid code. Check Google Authenticator and try again." };
   }
 
   await logSecurityEvent({

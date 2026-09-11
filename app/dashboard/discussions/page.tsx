@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Tabs } from "@/components/dashboard/Tabs";
 import { DiscussionsListView } from "./DiscussionsListView";
 
@@ -33,6 +34,20 @@ export default function DiscussionsPage() {
             Location-pinned hubs from the mobile app. Use cards to scan quickly, then open a hub for
             stewardship timelines, hub moderation, and analytics.
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href="/dashboard/seed-hubs"
+              className="inline-flex items-center rounded-full bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-300 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/25"
+            >
+              Seed hubs and merge old pins →
+            </Link>
+            <Link
+              href="/dashboard/groups"
+              className="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-semibold text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800"
+            >
+              Move groups between hubs →
+            </Link>
+          </div>
           <div className="mt-6 max-w-md">
             <Tabs
               tabs={[

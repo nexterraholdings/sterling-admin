@@ -59,7 +59,7 @@ export async function fetchProfiles(
     ...profile,
     operating_markets: profile.operating_markets ?? [],
     main_goals: profile.main_goals ?? [],
-    account_role: profile.account_role ?? "member",
+    account_role: profile.account_role ?? "user",
     moderation_strike_count: profile.moderation_strike_count ?? 0,
   }));
 
@@ -74,7 +74,7 @@ function normalizeProfile(profile: Record<string, unknown>): UserProfile {
     ...(profile as unknown as UserProfile),
     operating_markets: (profile.operating_markets as string[] | null) ?? [],
     main_goals: (profile.main_goals as string[] | null) ?? [],
-    account_role: (profile.account_role as string | null) ?? "member",
+    account_role: (profile.account_role as string | null) ?? "user",
     moderation_strike_count: (profile.moderation_strike_count as number | null) ?? 0,
   };
 }
@@ -413,7 +413,6 @@ async function clearOwnedDiscussions(id: string, context: string): Promise<void>
     }
   }
   await deleteByColumn("area_discussion_comments", "author_id", id, context);
-  await deleteByColumn("area_rates", "user_id", id, context);
   await deleteByColumn("area_discussion_participants", "user_id", id, context);
   await deleteByColumn("area_discussion_moderators", "user_id", id, context);
   await deleteByColumn("discussion_live_chat_messages", "author_id", id, context);
@@ -614,6 +613,309 @@ export async function deleteProfileOnly(id: string): Promise<void> {
     actorId: admin.id,
     actorLabel: admin.email,
   });
+}
+
+export type ProAccountStub = {
+  id: string;
+  username: string | null;
+  fullName: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
+};
+
+export async function listProAccounts(): Promise<ProAccountStub[]> {
+  await requireAdmin(OPERATOR_ROLES);
+  await requireServiceRole();
+
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("id,username,full_name,email,avatar_url,bio,created_at")
+    .ilike("email", "%@sterlingtest.local")
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) throw new Error(error.message);
+
+  type ProAccountRow = {
+    id: string;
+    username: string | null;
+    full_name: string | null;
+    email: string | null;
+    avatar_url: string | null;
+    bio: string | null;
+  };
+
+  return ((data ?? []) as ProAccountRow[]).map((row) => ({
+    id: String(row.id),
+    username: row.username ?? null,
+    fullName: row.full_name ?? null,
+    email: row.email ?? null,
+    avatarUrl: row.avatar_url ?? null,
+    bio: row.bio ?? null,
+  }));
+}
+
+/** Editing is restricted to profiles seeded by generateProAccount (the
+ * @sterlingtest.local marker), so this can never be used to rewrite a real
+ * user's profile. */
+export async function updateProAccount(
+  accountId: string,
+  formData: FormData
+): Promise<ProAccountStub> {
+  await requireAdmin(OPERATOR_ROLES);
+  await requireServiceRole();
+
+  const { data: existing, error: fetchError } = await supabaseAdmin
+    .from("profiles")
+    .select("id,email,avatar_url")
+    .eq("id", accountId)
+    .maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!existing) throw new Error("Prop account not found");
+  if (!String(existing.email ?? "").toLowerCase().endsWith("@sterlingtest.local")) {
+    throw new Error("Only prop/seed accounts can be edited here");
+  }
+
+  const name = String(formData.get("full_name") ?? "").trim() || "Pro Creator Test";
+  const fallbackUsername = `creator_${Math.round(Math.random() * 99999)}`;
+  const username = sanitizeUsername(String(formData.get("username") ?? ""), fallbackUsername);
+  const bio = String(formData.get("bio") ?? "").trim();
+  const avatarEntry = formData.get("avatar");
+  const avatar = avatarEntry instanceof File && avatarEntry.size > 0 ? avatarEntry : null;
+
+  let avatarUrl: string | null = existing.avatar_url ?? null;
+  if (avatar) {
+    const storagePath = `${accountId}/avatar.jpg`;
+    const buffer = Buffer.from(await avatar.arrayBuffer());
+    const { error: uploadError } = await supabaseAdmin.storage.from("avatars").upload(storagePath, buffer, {
+      contentType: avatar.type || "image/jpeg",
+      upsert: true,
+      cacheControl: "3600",
+    });
+    if (uploadError) throw new Error(`Could not upload avatar: ${uploadError.message}`);
+    const { data: pub } = supabaseAdmin.storage.from("avatars").getPublicUrl(storagePath);
+    avatarUrl = pub?.publicUrl ? `${pub.publicUrl}?t=${Date.now()}` : avatarUrl;
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from("profiles")
+    .update({
+      full_name: name,
+      username,
+      bio,
+      avatar_url: avatarUrl,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", accountId);
+  if (updateError) throw new Error(updateError.message);
+
+  return {
+    id: accountId,
+    username,
+    fullName: name,
+    email: existing.email ?? null,
+    avatarUrl,
+    bio,
+  };
+}
+
+function sanitizeUsername(raw: string, fallback: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || fallback;
+}
+
+export async function generateProAccount(formData: FormData): Promise<{
+  userId: string;
+  email: string;
+  username: string;
+  fullName: string;
+  accountRole: string;
+  avatarUrl: string | null;
+  bio: string;
+}> {
+  await requireAdmin(OPERATOR_ROLES);
+  await requireServiceRole();
+
+  const stamp = Math.round(Date.now() / 1000);
+  const rand = Math.round(Math.random() * 99999);
+  const email = `creator-${stamp}-${Math.round(Math.random() * 9999)}@sterlingtest.local`;
+  const fallbackUsername = `creator_${rand}_${stamp}`;
+  const name = String(formData.get("full_name") ?? "").trim() || "Pro Creator Test";
+  const username = sanitizeUsername(String(formData.get("username") ?? ""), fallbackUsername);
+  const bio =
+    String(formData.get("bio") ?? "").trim() || "Creator test account seeded for product demos and smoke testing.";
+  const accountRole = String(formData.get("account_role") ?? "creator").trim();
+  const avatarEntry = formData.get("avatar");
+  const avatar = avatarEntry instanceof File && avatarEntry.size > 0 ? avatarEntry : null;
+  const password = "DemoPassword123!";
+
+  const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: name },
+  });
+
+  if (authError || !authData?.user) {
+    throw new Error(authError?.message ?? "Could not create auth user for pro account");
+  }
+
+  const userId = authData.user.id;
+
+  // The profiles.account_role enum is stricter than the app-facing role labels
+  // (it only accepts "user" | "moderator" | "admin" | "owner" in this DB — no
+  // "member"/"creator"/"support"), and the "role" column is a free-text
+  // onboarding "main goal" field, not an app role — leave it untouched.
+  const ACCOUNT_ROLE_ENUM_VALUES = new Set(["user", "moderator", "admin", "owner"]);
+  const safeAccountRole = ACCOUNT_ROLE_ENUM_VALUES.has(accountRole) ? accountRole : "user";
+
+  // avatar_url is validated by a DB trigger that requires it to point at the
+  // user's own object in the "avatars" storage bucket, so an arbitrary
+  // external image URL (e.g. Unsplash) is rejected as profile_image_url_invalid.
+  // Upload the picked file there, or leave the column empty if none was given.
+  let avatarUrl: string | null = null;
+  if (avatar) {
+    const storagePath = `${userId}/avatar.jpg`;
+    const buffer = Buffer.from(await avatar.arrayBuffer());
+    const { error: uploadError } = await supabaseAdmin.storage.from("avatars").upload(storagePath, buffer, {
+      contentType: avatar.type || "image/jpeg",
+      upsert: true,
+      cacheControl: "3600",
+    });
+    if (uploadError) {
+      await supabaseAdmin.auth.admin.deleteUser(userId, false).catch(() => undefined);
+      throw new Error(`Could not upload avatar: ${uploadError.message}`);
+    }
+    const { data: pub } = supabaseAdmin.storage.from("avatars").getPublicUrl(storagePath);
+    avatarUrl = pub?.publicUrl ? `${pub.publicUrl}?t=${Date.now()}` : null;
+  }
+
+  // Signing up the auth user already triggers creation of its profiles row
+  // (with defaults), so this seeds that existing row rather than inserting a
+  // new one — upsert covers both cases without depending on trigger timing.
+  const profilePayload = {
+    id: userId,
+    email,
+    full_name: name,
+    username,
+    account_role: safeAccountRole,
+    avatar_url: avatarUrl,
+    bio,
+    operating_markets: [],
+    main_goals: [],
+    fake_connection_count: 12,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .upsert(profilePayload, { onConflict: "id" });
+  if (profileError) {
+    await supabaseAdmin.auth.admin.deleteUser(userId, false).catch(() => undefined);
+    throw new Error(profileError.message);
+  }
+
+  const { data: sampleProfiles, error: sampleError } = await supabaseAdmin
+    .from("profiles")
+    .select("id")
+    .neq("id", userId)
+    .limit(12);
+
+  if (!sampleError && (sampleProfiles ?? []).length > 0) {
+    const targetIds = (sampleProfiles ?? [])
+      .map((row: { id: string }) => row.id)
+      .filter((id: string) => Boolean(id));
+
+    const rows = targetIds.map((targetId: string) => ({
+      requester_id: userId,
+      addressee_id: targetId,
+      created_at: new Date().toISOString(),
+    }));
+
+    try {
+      await supabaseAdmin.from("connections").insert(rows);
+    } catch {
+      // The app may not expose a dedicated connections table in all environments.
+    }
+
+    try {
+      await supabaseAdmin
+        .from("follows")
+        .insert(
+          targetIds.map((targetId: string) => ({
+            follower_id: userId,
+            followee_id: targetId,
+            created_at: new Date().toISOString(),
+          }))
+        );
+    } catch {
+      // The app may not expose a dedicated follows table in all environments.
+    }
+  }
+
+  return {
+    userId,
+    email,
+    username,
+    fullName: name,
+    accountRole: safeAccountRole,
+    avatarUrl,
+    bio,
+  };
+}
+
+export async function seedProAccountContent(
+  accountId: string,
+  body: string,
+  communityId: string | null = null
+): Promise<{ postId: string; authorUsername: string | null; createdAt: string }> {
+  await requireAdmin(OPERATOR_ROLES);
+  await requireServiceRole();
+
+  const safeBody = body.trim();
+  if (!safeBody) {
+    throw new Error("Post body is required");
+  }
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select("username, full_name, account_role")
+    .eq("id", accountId)
+    .maybeSingle();
+
+  if (profileError) throw new Error(profileError.message);
+  if (!profile) throw new Error("Pro account profile not found");
+
+  const { data, error } = await supabaseAdmin
+    .from("posts")
+    .insert({
+      body: safeBody,
+      author_id: accountId,
+      author_username: profile.username ?? profile.full_name ?? "creator",
+      community_id: communityId,
+      likes_count: 0,
+      comments_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      status: "published",
+      post_type: "creator_seed",
+    })
+    .select("id,author_username,created_at")
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  return {
+    postId: data.id,
+    authorUsername: data.author_username ?? profile.username ?? null,
+    createdAt: data.created_at ?? new Date().toISOString(),
+  };
 }
 
 export async function deleteUserByTarget(

@@ -3,14 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DiscussionAnalyticsPayload, DiscussionRow, DiscussionTrendPoint } from "@/lib/discussions/types";
 import {
-  formatDurationShort,
   funnelPct,
   HUB_TAB_VIEW_LABELS,
 } from "@/lib/discussions/mapDiscussionAnalytics";
 import {
   EmptyState,
   LifecyclePill,
-  LiveBadge,
   SectionCard,
   formatRelativeTime,
 } from "../discussionUi";
@@ -47,7 +45,7 @@ function TrendBars({
   colorClass,
 }: {
   trend: DiscussionTrendPoint[];
-  field: "views" | "posts" | "ratings";
+  field: "views" | "posts";
   max: number;
   colorClass: string;
 }) {
@@ -128,7 +126,7 @@ function ReachFunnel({ a }: { a: DiscussionAnalyticsPayload }) {
         {a.memberCount > 0 ? (
           <li className={`rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 ${a.uniqueViewers > 0 ? "ml-8" : ""}`}>
             <p className="font-semibold text-zinc-200">Engaged members</p>
-            <p className="text-xs text-zinc-500">Posted on the feed or left a star rating</p>
+            <p className="text-xs text-zinc-500">Posted on the feed</p>
             <p className="mt-1 tabular-nums text-zinc-300">
               {a.engagedParticipantCount} / {a.memberCount}
               {memberEngage != null ? ` (${memberEngage}%)` : ""}
@@ -174,7 +172,7 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
   const tabRows = useMemo(() => {
     if (!analytics) return [];
     return Object.entries(analytics.tabViews)
-      .filter(([, count]) => count > 0)
+      .filter(([tab, count]) => count > 0 && tab !== "events" && tab !== "live_chat")
       .sort((a, b) => b[1] - a[1])
       .map(([tab, count]) => ({
         tab,
@@ -185,24 +183,6 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
 
   const maxTrendViews = Math.max(1, ...trend.map((t) => t.views));
   const maxTrendPosts = Math.max(1, ...trend.map((t) => t.posts));
-  const maxTrendRatings = Math.max(1, ...trend.map((t) => t.ratings));
-
-  const ratingTotal = analytics?.rateCount ?? discussion.rate_count;
-  const starDistribution = analytics
-    ? ([5, 4, 3, 2, 1] as const).map((star) => ({
-        star,
-        count:
-          star === 5
-            ? analytics.stars5
-            : star === 4
-              ? analytics.stars4
-              : star === 3
-                ? analytics.stars3
-                : star === 2
-                  ? analytics.stars2
-                  : analytics.stars1,
-      }))
-    : [];
 
   if (loading) {
     return (
@@ -237,7 +217,6 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <LifecyclePill status={discussion.lifecycle_status} />
-          <LiveBadge active={discussion.is_live} />
         </div>
         <p className="mt-2 text-sm text-zinc-500">
           Same metrics as the mobile steward analytics screen. Views and tab opens count once per member per day;
@@ -255,7 +234,7 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
         <StatCard
           label="Members"
           value={a.memberCount.toLocaleString()}
-          sub={`${a.engagedParticipantCount} posted or rated`}
+          sub={`${a.engagedParticipantCount} posted`}
         />
         <StatCard
           label="Feed posts"
@@ -284,13 +263,11 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
       )}
 
       {trend.length > 0 && (
-        <SectionCard title="Activity, last 14 days" description="Daily views, posts, and star ratings.">
+        <SectionCard title="Activity, last 14 days" description="Daily views and posts.">
           <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Views</p>
           <TrendBars trend={trend} field="views" max={maxTrendViews} colorClass="bg-blue-500/80" />
           <p className="mt-4 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Posts</p>
           <TrendBars trend={trend} field="posts" max={maxTrendPosts} colorClass="bg-emerald-500/80" />
-          <p className="mt-4 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Ratings</p>
-          <TrendBars trend={trend} field="ratings" max={maxTrendRatings} colorClass="bg-amber-500/80" />
         </SectionCard>
       )}
 
@@ -329,51 +306,7 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
         </div>
       </SectionCard>
 
-      <SectionCard title="Ratings" description="Star distribution from area_rates.">
-        {ratingTotal === 0 ? (
-          <p className="text-sm text-zinc-500">No ratings yet</p>
-        ) : (
-          <>
-            <p className="text-3xl font-semibold text-zinc-50">
-              {(a.avgRate ?? discussion.avg_rate ?? 0).toFixed(1)}
-              <span className="ml-1 text-2xl text-amber-400">★</span>
-              <span className="ml-2 text-sm font-normal text-zinc-500">({ratingTotal} total)</span>
-            </p>
-            <ul className="mt-4 space-y-2">
-              {starDistribution.map(({ star, count }) => {
-                const pct = ratingTotal ? (count / ratingTotal) * 100 : 0;
-                return (
-                  <li key={star} className="flex items-center gap-3 text-xs">
-                    <span className="w-3 font-bold text-zinc-500">{star}</span>
-                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
-                      <div className="h-full rounded-full bg-amber-400/90" style={{ width: `${pct}%` }} />
-                    </div>
-                    <span className="w-8 text-right tabular-nums text-zinc-500">{count}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-      </SectionCard>
-
-      {(a.liveSessionCount > 0 || a.liveChatMessages > 0) && (
-        <SectionCard title="Live" description="Sessions and live chat volume.">
-          <p className="text-sm leading-relaxed text-zinc-300">
-            {a.liveSessionCount} session{a.liveSessionCount !== 1 ? "s" : ""} ·{" "}
-            {formatDurationShort(a.liveSecondsTotal)} total · {formatDurationShort(a.liveSeconds7d)} in the last 7 days
-            (weekly budget meter)
-          </p>
-          <p className="mt-2 text-sm text-zinc-500">
-            {a.liveChatMessages.toLocaleString()} live chat message{a.liveChatMessages !== 1 ? "s" : ""}
-            {a.liveChatHiddenMessages > 0
-              ? ` (${a.liveChatHiddenMessages} hidden by moderation)`
-              : ""}
-          </p>
-        </SectionCard>
-      )}
-
-      <SectionCard title="Hub content" description="Non-feed assets in the hub hub.">
+      <SectionCard title="Hub content" description="Non-feed assets in the hub.">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard label="Updates" value={a.updatesCount.toLocaleString()} />
           <StatCard label="Media" value={a.mediaCount.toLocaleString()} />

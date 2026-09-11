@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
-import type { DiscussionRow, LiveSessionRow, ProfileStub } from "@/lib/discussions/types";
+import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
+import { mapHubNameDbError } from "@/lib/hub-name";
+import { isHubNameUniqueViolation, prepareUniqueHubName } from "@/lib/hub-name-db";
+import type { DiscussionRow, ProfileStub } from "@/lib/discussions/types";
+
+const DETAIL_SELECT =
+  "id,creator_id,title,description,center_lat,center_lng,radius_miles,location_hint,comment_count,lifecycle_status,engagement_score,unique_participant_count,bootstrap_expires_at,last_check_in_at,check_in_due_at,grace_expires_at,claim_window_opens_at,claim_window_closes_at,auto_share_updates,auto_share_feed,created_at,updated_at,origin,avatar_url,never_expires,place_kind,place_key";
+
+const DETAIL_CORE_SELECT =
+  "id,creator_id,title,description,center_lat,center_lng,radius_miles,location_hint,comment_count,lifecycle_status,engagement_score,unique_participant_count,created_at,updated_at";
 
 export type ReverseGeocodedAddress = {
   display_name: string;
@@ -38,16 +47,6 @@ async function reverseGeocode(lat: number, lng: number): Promise<ReverseGeocoded
   }
 }
 
-type CommentRow = {
-  id: string;
-  discussion_id: string;
-  author_id: string;
-  body: string;
-  parent_id: string | null;
-  likes_count: number;
-  created_at: string;
-};
-
 type ReportRow = {
   id: string;
   reporter_id: string;
@@ -64,93 +63,61 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
 
   try {
-    const { data: discussion, error: discussionError } = await supabaseAdmin
+    let discussionRes = await supabaseAdmin
       .from("area_discussions")
-      .select("*")
+      .select(DETAIL_SELECT)
       .eq("id", id)
       .maybeSingle();
-    if (discussionError) throw new Error(discussionError.message);
-    if (!discussion) return NextResponse.json({ error: "Hub not found" }, { status: 404 });
+    if (discussionRes.error && isMissingSchemaError(discussionRes.error)) {
+      discussionRes = await supabaseAdmin
+        .from("area_discussions")
+        .select(DETAIL_CORE_SELECT)
+        .eq("id", id)
+        .maybeSingle();
+    }
+    if (discussionRes.error) throw new Error(discussionRes.error.message);
+    if (!discussionRes.data) return NextResponse.json({ error: "Hub not found" }, { status: 404 });
 
-    const d = discussion as DiscussionRow;
+    const d = discussionRes.data as DiscussionRow;
 
-    const [commentsRes, ratesRes, reportsRes, sessionsRes, address, claimsRes] =
-      await Promise.all([
-        supabaseAdmin
-          .from("area_discussion_comments")
-          .select("*")
-          .eq("discussion_id", id)
-          .order("created_at", { ascending: true })
-          .limit(200),
-        supabaseAdmin.from("area_rates").select("value").eq("discussion_id", id),
-        supabaseAdmin
-          .from("reports")
-          .select("id,reporter_id,report_type,category,description,status,discussion_id,created_at")
-          .eq("discussion_id", id)
-          .order("created_at", { ascending: false }),
-        supabaseAdmin
-          .from("discussion_live_sessions")
-          .select("id,discussion_id,started_at,ended_at,end_reason")
-          .eq("discussion_id", id)
-          .order("started_at", { ascending: false })
-          .limit(50),
-        reverseGeocode(d.center_lat, d.center_lng),
-        supabaseAdmin
-          .from("discussion_stewardship_claims")
-          .select("user_id,created_at")
-          .eq("discussion_id", id)
-          .order("created_at", { ascending: true }),
-      ]);
+    const [reportsRes, address, claimsRes] = await Promise.all([
+      supabaseAdmin
+        .from("reports")
+        .select("id,reporter_id,report_type,category,description,status,discussion_id,created_at")
+        .eq("discussion_id", id)
+        .order("created_at", { ascending: false }),
+      reverseGeocode(d.center_lat, d.center_lng),
+      supabaseAdmin
+        .from("discussion_stewardship_claims")
+        .select("user_id,created_at")
+        .eq("discussion_id", id)
+        .order("created_at", { ascending: true }),
+    ]);
 
-    if (commentsRes.error) throw new Error(commentsRes.error.message);
-    if (ratesRes.error) throw new Error(ratesRes.error.message);
-    if (reportsRes.error) throw new Error(reportsRes.error.message);
-    if (sessionsRes.error) throw new Error(sessionsRes.error.message);
+    const reports = reportsRes.error ? [] : ((reportsRes.data ?? []) as ReportRow[]);
 
-    const comments = (commentsRes.data ?? []) as CommentRow[];
-    const reports = (reportsRes.data ?? []) as ReportRow[];
-    const liveSessions = (sessionsRes.data ?? []) as LiveSessionRow[];
-
-    const profileIds = [
-      ...new Set([
-        d.creator_id,
-        ...comments.map((c) => c.author_id),
-        ...reports.map((r) => r.reporter_id),
-      ]),
-    ];
+    const profileIds = [...new Set([d.creator_id, ...reports.map((r) => r.reporter_id)].filter(Boolean))];
     const { data: profiles, error: profilesError } = profileIds.length
       ? await supabaseAdmin.from("profiles").select("id,full_name,username,avatar_url").in("id", profileIds)
       : { data: [] as ProfileStub[], error: null };
-    if (profilesError) throw new Error(profilesError.message);
+    if (profilesError && !isMissingSchemaError(profilesError)) throw new Error(profilesError.message);
 
     const profileMap = new Map<string, ProfileStub>(((profiles as ProfileStub[]) ?? []).map((p) => [p.id, p]));
-
-    const distribution: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    for (const r of (ratesRes.data ?? []) as { value: number }[]) {
-      const bucket = Math.min(5, Math.max(1, Math.round(r.value))) as 1 | 2 | 3 | 4 | 5;
-      distribution[bucket]++;
-    }
-
-    const liveLimitsRes = await supabaseAdmin.rpc("get_discussion_live_limits", { p_discussion_id: id });
 
     return NextResponse.json({
       discussion: {
         ...d,
+        avg_rate: null,
+        rate_count: 0,
+        is_live: false,
         creator: profileMap.get(d.creator_id) ?? null,
         auto_share_updates: Boolean(d.auto_share_updates),
         auto_share_feed: Boolean(d.auto_share_feed),
       },
-      comments: comments.map((c) => ({ ...c, author: profileMap.get(c.author_id) ?? null })),
-      ratings: {
-        avg_rate: d.avg_rate,
-        rate_count: d.rate_count,
-        distribution,
-      },
+      comments: [],
       reports: reports.map((r) => ({ ...r, reporter: profileMap.get(r.reporter_id) ?? null })),
       address,
-      liveSessions,
-      liveLimits: liveLimitsRes.data ?? null,
-      stewardshipClaims: claimsRes.error ? [] : (claimsRes.data ?? []),
+      stewardshipClaims: Array.isArray(claimsRes.data) ? claimsRes.data : [],
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to fetch hub";
@@ -172,11 +139,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const updates: Record<string, unknown> = {};
 
   if (typeof body.title === "string") {
-    const title = body.title.trim();
-    if (title.length < 1 || title.length > 60) {
-      return NextResponse.json({ error: "Title must be 1–60 characters" }, { status: 400 });
+    try {
+      updates.title = await prepareUniqueHubName(body.title, id);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Invalid hub name";
+      return NextResponse.json({ error: message }, { status: 400 });
     }
-    updates.title = title;
   }
 
   if (body.description === null) {
@@ -206,7 +174,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .eq("id", id)
       .select("*")
       .maybeSingle();
-    if (updateError) throw new Error(updateError.message);
+    if (updateError) {
+      if (isHubNameUniqueViolation(updateError)) {
+        return NextResponse.json({ error: "That hub name is already in use." }, { status: 400 });
+      }
+      throw new Error(mapHubNameDbError(updateError.message) || updateError.message);
+    }
 
     await logAdminAction({
       category: "moderation",

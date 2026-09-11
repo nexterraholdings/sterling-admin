@@ -23,13 +23,11 @@ type Props = {
 const TAB_BLURBS: Record<DiscussionHubTab, string> = {
   feed: "Top-level opinions and replies — hide, pin, or remove violating posts.",
   updates: "Steward check-ins and manual updates shared with members.",
-  events: "Meetups linked to this hub’s map area.",
   media: "Photos and GIFs uploaded to the hub.",
   resources: "Links, notes, and documents pinned in the hub.",
   wiki: "Collaborative wiki sections.",
   people: "Participants and appointed moderators.",
   polls: "Active and historical polls — close any that should end early.",
-  live_chat: "Messages from live sessions — hide spam without deleting history.",
 };
 
 export function DiscussionHubPanel({ discussionId, tab, onActionError }: Props) {
@@ -131,24 +129,6 @@ export function DiscussionHubPanel({ discussionId, tab, onActionError }: Props) 
     const res = await fetch(`/api/admin/discussions/${discussionId}/polls/${pollId}/close`, {
       method: "POST",
     });
-    const body = await res.json();
-    if (!res.ok) {
-      onActionError(body.error || "Failed");
-      return;
-    }
-    load();
-  }
-
-  async function toggleLiveChatHidden(messageId: string, hidden: boolean) {
-    onActionError(null);
-    const res = await fetch(
-      `/api/admin/discussions/${discussionId}/items/${messageId}?kind=live_chat`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hidden }),
-      }
-    );
     const body = await res.json();
     if (!res.ok) {
       onActionError(body.error || "Failed");
@@ -272,38 +252,7 @@ export function DiscussionHubPanel({ discussionId, tab, onActionError }: Props) 
         />
       )}
 
-      {tab === "live_chat" && (
-        <ItemList
-          empty="No live chat messages."
-          items={filteredItems as Record<string, unknown>[]}
-          render={(m) => {
-            const messageId = String(m.id);
-            const hidden = Boolean(m.is_hidden);
-            return (
-              <div key={messageId} className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
-                <p className="text-sm text-zinc-300">{String(m.body ?? "")}</p>
-                <p className="mt-1 text-[11px] text-zinc-500">
-                  {formatDiscussionDate(String(m.created_at ?? ""))}
-                  {hidden ? " · hidden" : ""}
-                </p>
-                <div className="mt-3">
-                  <ModerationMenu
-                    actions={[
-                      {
-                        id: "toggle",
-                        label: hidden ? "Unhide message" : "Hide message",
-                        onClick: () => toggleLiveChatHidden(messageId, !hidden),
-                      },
-                    ]}
-                  />
-                </div>
-              </div>
-            );
-          }}
-        />
-      )}
-
-      {!["feed", "people", "polls", "live_chat"].includes(tab) && (
+      {!["feed", "people", "polls"].includes(tab) && (
         <GenericTab tab={tab} items={filteredItems as Record<string, unknown>[]} onDelete={deleteItem} />
       )}
 
@@ -398,7 +347,6 @@ function GenericTab({
     media: "media",
     resources: "resource",
     wiki: "wiki",
-    events: "event",
   };
   const deleteKind = kindByTab[tab];
 

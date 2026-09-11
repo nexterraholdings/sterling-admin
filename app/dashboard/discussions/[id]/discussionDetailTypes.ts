@@ -1,4 +1,4 @@
-import type { DiscussionRow, LiveSessionRow, ProfileStub } from "@/lib/discussions/types";
+import type { DiscussionRow, ProfileStub } from "@/lib/discussions/types";
 
 export type ReverseGeocodedAddress = {
   display_name: string;
@@ -32,11 +32,6 @@ export type DetailComment = {
 export type DetailResponse = {
   discussion: DetailDiscussion;
   comments: DetailComment[];
-  ratings: {
-    avg_rate: number | null;
-    rate_count: number;
-    distribution: Record<1 | 2 | 3 | 4 | 5, number>;
-  };
   reports: Array<{
     id: string;
     reporter_id: string;
@@ -47,8 +42,6 @@ export type DetailResponse = {
     reporter: ProfileStub | null;
   }>;
   address: ReverseGeocodedAddress | null;
-  liveSessions: LiveSessionRow[];
-  liveLimits: Record<string, unknown> | null;
   stewardshipClaims: Array<{ user_id: string; created_at: string }>;
 };
 
@@ -65,15 +58,4 @@ export function formatDiscussionDate(dateStr: string): string {
 export function profileLabel(p: ProfileStub | null): string {
   if (!p) return "Unknown user";
   return p.username ? `@${p.username}` : p.full_name ?? "Unknown user";
-}
-
-export function formatLiveDuration(started: string, ended: string | null): string {
-  const startMs = Date.parse(started);
-  const endMs = ended ? Date.parse(ended) : Date.now();
-  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "—";
-  const mins = Math.max(0, Math.round((endMs - startMs) / 60000));
-  if (mins < 60) return `${mins}m`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m ? `${h}h ${m}m` : `${h}h`;
 }

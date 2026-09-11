@@ -4,19 +4,13 @@ const allowed = new Set([
   "-created_at",
   "comment_count",
   "-comment_count",
-  "rate_count",
-  "-rate_count",
-  "avg_rate",
-  "-avg_rate",
   "engagement_score",
   "-engagement_score",
   "title",
   "-title",
-  "live_last_go_live_at",
-  "-live_last_go_live_at",
 ]);
 
-const samples = ["-created_at", "-live_last_go_live_at", "title"];
+const samples = ["-created_at", "title"];
 for (const s of samples) {
   const col = s.replace(/^-/, "");
   if (!allowed.has(s)) {

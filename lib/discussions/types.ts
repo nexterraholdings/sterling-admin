@@ -63,24 +63,20 @@ export type LiveSessionRow = {
 export type DiscussionHubTab =
   | "feed"
   | "updates"
-  | "events"
   | "media"
   | "resources"
   | "wiki"
   | "people"
-  | "polls"
-  | "live_chat";
+  | "polls";
 
 export const DISCUSSION_HUB_TABS: { id: DiscussionHubTab; label: string }[] = [
   { id: "feed", label: "Feed" },
   { id: "updates", label: "Updates" },
-  { id: "events", label: "Events" },
   { id: "media", label: "Media" },
   { id: "resources", label: "Resources" },
   { id: "wiki", label: "Wiki" },
   { id: "people", label: "People" },
   { id: "polls", label: "Polls" },
-  { id: "live_chat", label: "Live chat" },
 ];
 
 export type DiscussionAnalyticsPayload = {

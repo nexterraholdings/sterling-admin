@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
   --background: #09090b;
@@ -46,14 +47,128 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --radius-lg: var(--radius);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-serif: var(--font-source-serif), "Iowan Old Style", Palatino, Georgia, serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+.blog-prose {
+  font-family: var(--font-serif);
+  font-size: 1.125rem;
+  line-height: 1.8;
+  color: #e4e4e7;
+}
+
+.blog-prose h1,
+.blog-prose h2,
+.blog-prose h3,
+.blog-prose h4 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: #fafafa;
+  line-height: 1.2;
+}
+
+.blog-prose h1 {
+  font-size: 2.15rem;
+  margin: 1.6em 0 0.6em;
+}
+
+.blog-prose h2 {
+  font-size: 1.55rem;
+  margin: 1.5em 0 0.5em;
+}
+
+.blog-prose h3 {
+  font-size: 1.25rem;
+  margin: 1.35em 0 0.45em;
+}
+
+.blog-prose p,
+.blog-prose ul,
+.blog-prose ol {
+  margin: 0 0 1.15em;
+}
+
+.blog-prose a {
+  color: #6ee7b7;
+  text-underline-offset: 3px;
+}
+
+.blog-prose blockquote {
+  border-left: 3px solid rgba(16, 185, 129, 0.55);
+  padding-left: 1rem;
+  color: #a1a1aa;
+  font-style: italic;
+}
+
+.blog-prose img {
+  border-radius: 1rem;
+  margin: 1.5rem 0;
+}
+
+.blog-prose pre {
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 0.9rem;
+  padding: 1rem 1.1rem;
+  font-size: 0.9rem;
+}
+
+.blog-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.blog-prose table {
+  width: 100%;
+  font-size: 0.95rem;
+}
+
+.blog-toolbar-btn {
+  display: inline-flex;
+  height: 2rem;
+  min-width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.6rem;
+  color: #d4d4d8;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.blog-toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fafafa;
+}
+
+.blog-toolbar-btn:focus-visible {
+  outline: 2px solid rgba(16, 185, 129, 0.55);
+  outline-offset: 1px;
+}
+
+.coverage-map .leaflet-tooltip.seeded-hub-label {
+  background: rgba(9, 9, 11, 0.92);
+  border: 1px solid #3f3f46;
+  border-radius: 0.55rem;
+  box-shadow: none;
+  color: #fafafa;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 3px 8px;
+  white-space: normal;
+}
+
+.coverage-map .leaflet-tooltip.seeded-hub-label::before {
+  border-top-color: #3f3f46;
 }
 
 * {

@@ -63,12 +63,10 @@ export const HUB_TAB_VIEW_LABELS: Record<string, string> = {
   feed: "Feed",
   media: "Media",
   updates: "Updates",
-  events: "Events",
   resources: "Resources",
   wiki: "Wiki",
   people: "People",
   polls: "Polls",
-  live_chat: "Live chat",
 };
 
 export function funnelPct(numerator: number, denominator: number): number | null {

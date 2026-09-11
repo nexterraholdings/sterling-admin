@@ -6,13 +6,11 @@ import type { DiscussionHubTab } from "@/lib/discussions/types";
 const TABS = new Set<DiscussionHubTab>([
   "feed",
   "updates",
-  "events",
   "media",
   "resources",
   "wiki",
   "people",
   "polls",
-  "live_chat",
 ]);
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -46,15 +44,6 @@ export async function GET(req: NextRequest, { params }: Ctx) {
           .eq("discussion_id", id)
           .order("created_at", { ascending: false })
           .range(offset, offset + limit - 1);
-        if (error) throw new Error(error.message);
-        return NextResponse.json({ tab, items: data ?? [], offset, limit });
-      }
-      case "events": {
-        const { data, error } = await supabaseAdmin.rpc("get_discussion_events", {
-          p_discussion_id: id,
-          p_limit: limit,
-          p_offset: offset,
-        });
         if (error) throw new Error(error.message);
         return NextResponse.json({ tab, items: data ?? [], offset, limit });
       }
@@ -132,16 +121,6 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         const payload = data as { items?: unknown[] } | unknown[] | null;
         const items = Array.isArray(payload) ? payload : (payload?.items ?? []);
         return NextResponse.json({ tab, items, offset, limit });
-      }
-      case "live_chat": {
-        const { data, error } = await supabaseAdmin
-          .from("discussion_live_chat_messages")
-          .select("id,discussion_id,author_id,body,created_at,is_hidden")
-          .eq("discussion_id", id)
-          .order("created_at", { ascending: false })
-          .range(offset, offset + limit - 1);
-        if (error) throw new Error(error.message);
-        return NextResponse.json({ tab, items: data ?? [], offset, limit });
       }
       default:
         return NextResponse.json({ error: "Unknown tab" }, { status: 400 });

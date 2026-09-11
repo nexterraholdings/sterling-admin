@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { DetailResponse } from "./discussionDetailTypes";
-import { formatDiscussionDate, formatLiveDuration, profileLabel } from "./discussionDetailTypes";
+import { formatDiscussionDate, profileLabel } from "./discussionDetailTypes";
 import {
   ADMIN_DISCUSSION_LIFECYCLE_OPTIONS,
   DISCUSSION_LIFECYCLE_LABELS,
@@ -19,6 +19,7 @@ import {
   filterInputProps,
   formatRelativeTime,
 } from "../discussionUi";
+import { HUB_NAME_HINT, sanitizeHubNameInput } from "@/lib/hub-name";
 
 const REPORT_STATUS_STYLE: Record<string, string> = {
   pending: "bg-amber-500/15 text-amber-300",
@@ -36,27 +37,30 @@ type Props = {
 };
 
 export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onDeleted }: Props) {
-  const { discussion, ratings, reports, address, liveSessions, liveLimits, stewardshipClaims } = data;
+  const discussion = data.discussion;
+  const reports = data.reports ?? [];
+  const address = data.address ?? null;
+  const stewardshipClaims = data.stewardshipClaims ?? [];
   const pendingReports = reports.filter((r) => r.status === "pending");
 
-  const [editTitle, setEditTitle] = useState(discussion.title);
+  const [editTitle, setEditTitle] = useState(sanitizeHubNameInput(discussion.title ?? ""));
   const [editDescription, setEditDescription] = useState(discussion.description ?? "");
   const lifecyclePhase = normalizeDiscussionLifecycleStatus(discussion.lifecycle_status);
   const isBootstrapPhase = lifecyclePhase === "bootstrap";
   const [editLifecycle, setEditLifecycle] = useState(lifecyclePhase);
-  const [editLat, setEditLat] = useState(String(discussion.center_lat));
-  const [editLng, setEditLng] = useState(String(discussion.center_lng));
+  const [editLat, setEditLat] = useState(String(discussion.center_lat ?? ""));
+  const [editLng, setEditLng] = useState(String(discussion.center_lng ?? ""));
   const [editHint, setEditHint] = useState(discussion.location_hint ?? "");
   const [autoShareUpdates, setAutoShareUpdates] = useState(discussion.auto_share_updates);
   const [autoShareFeed, setAutoShareFeed] = useState(discussion.auto_share_feed);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setEditTitle(discussion.title);
+    setEditTitle(sanitizeHubNameInput(discussion.title ?? ""));
     setEditDescription(discussion.description ?? "");
     setEditLifecycle(normalizeDiscussionLifecycleStatus(discussion.lifecycle_status));
-    setEditLat(String(discussion.center_lat));
-    setEditLng(String(discussion.center_lng));
+    setEditLat(String(discussion.center_lat ?? ""));
+    setEditLng(String(discussion.center_lng ?? ""));
     setEditHint(discussion.location_hint ?? "");
     setAutoShareUpdates(discussion.auto_share_updates);
     setAutoShareFeed(discussion.auto_share_feed);
@@ -214,10 +218,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
   const osmEmbedSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.01},${lat - 0.01},${lng + 0.01},${lat + 0.01}&layer=mapnik&marker=${lat},${lng}`;
   const googleMapsLink = `https://www.google.com/maps?q=${lat},${lng}`;
 
-  const weeklyUsed = Number(liveLimits?.weekly_used_seconds ?? 0);
-  const weeklyCap = Number(liveLimits?.weekly_cap_seconds ?? 86400);
-  const weeklyPct = weeklyCap > 0 ? Math.min(100, Math.round((weeklyUsed / weeklyCap) * 100)) : 0;
-
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="space-y-4 lg:col-span-2">
@@ -226,22 +226,9 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
             <PrimaryButton disabled={busy} onClick={() => postJson(`/api/admin/discussions/${id}/check-in`)}>
               Force check-in
             </PrimaryButton>
-            {discussion.is_live ? (
-              <PrimaryButton
-                variant="danger"
-                disabled={busy}
-                onClick={() => postJson(`/api/admin/discussions/${id}/live`, { enabled: false })}
-              >
-                End live session
-              </PrimaryButton>
-            ) : (
-              <PrimaryButton disabled={busy} onClick={() => postJson(`/api/admin/discussions/${id}/live`, { enabled: true })}>
-                Start live (admin)
-              </PrimaryButton>
-            )}
             {pendingReports.length > 0 && (
               <span className="self-center text-xs text-rose-300">
-                {pendingReports.length} pending report{pendingReports.length !== 1 ? "s" : ""} — see Trust below
+                {pendingReports.length} pending report{pendingReports.length !== 1 ? "s" : ""} — see Reports
               </span>
             )}
           </div>
@@ -254,7 +241,16 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <FilterField label="Title" className="sm:col-span-2">
-              <input {...filterInputProps()} value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={60} />
+              <input
+                {...filterInputProps()}
+                value={editTitle ?? ""}
+                onChange={(e) => setEditTitle(sanitizeHubNameInput(e.target.value))}
+                maxLength={24}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <p className="mt-1.5 text-xs text-zinc-500">{HUB_NAME_HINT}</p>
             </FilterField>
             <FilterField label="Lifecycle">
               <select
@@ -284,7 +280,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
             </div>
             <FilterField label="Description" className="sm:col-span-2">
               <textarea
-                value={editDescription}
+                value={editDescription ?? ""}
                 onChange={(e) => setEditDescription(e.target.value)}
                 rows={4}
                 className={`${filterInputProps().className} resize-none`}
@@ -293,7 +289,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
           </div>
         </DetailAccordion>
 
-        <DetailAccordion title="Stewardship & live" summary="Deadlines, weekly live budget, session history">
+        <DetailAccordion title="Stewardship" summary="Check-in deadlines and claim window">
           <dl className="grid gap-3 sm:grid-cols-2">
             {discussion.bootstrap_expires_at && (
               <div>
@@ -319,44 +315,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
                 <dd className="text-sm text-zinc-300">{formatDiscussionDate(discussion.grace_expires_at)}</dd>
               </div>
             )}
-            {discussion.live_last_go_live_at && (
-              <div>
-                <dt className="text-[10px] uppercase text-zinc-500">Last went live</dt>
-                <dd className="text-sm text-zinc-300">{formatDiscussionDate(discussion.live_last_go_live_at)}</dd>
-              </div>
-            )}
           </dl>
-
-          <div className="mt-5">
-            <div className="flex justify-between text-xs text-zinc-500">
-              <span>Weekly live budget</span>
-              <span>
-                {Math.round(weeklyUsed / 60)}m / {Math.round(weeklyCap / 60)}m
-              </span>
-            </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-800">
-              <div className="h-full rounded-full bg-rose-500/80 transition-all" style={{ width: `${weeklyPct}%` }} />
-            </div>
-          </div>
-
-          {liveSessions.length > 0 && (
-            <ul className="mt-6 space-y-3">
-              {liveSessions.slice(0, 8).map((s) => (
-                <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-3 text-sm">
-                  <div>
-                    <p className="font-medium text-zinc-200">{formatLiveDuration(s.started_at, s.ended_at)}</p>
-                    <p className="text-xs text-zinc-500">
-                      {formatDiscussionDate(s.started_at)}
-                      {s.ended_at ? ` → ${formatDiscussionDate(s.ended_at)}` : " · still open"}
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] uppercase text-zinc-400">
-                    {s.end_reason ?? "—"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
 
           {(normalizeAdminLifecycleStatus(discussion.lifecycle_status) === "claimable"
             || claimWindowLines.length > 0) && (
@@ -393,13 +352,13 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
           </a>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <FilterField label="Latitude">
-              <input {...filterInputProps()} value={editLat} onChange={(e) => setEditLat(e.target.value)} />
+              <input {...filterInputProps()} value={editLat ?? ""} onChange={(e) => setEditLat(e.target.value)} />
             </FilterField>
             <FilterField label="Longitude">
-              <input {...filterInputProps()} value={editLng} onChange={(e) => setEditLng(e.target.value)} />
+              <input {...filterInputProps()} value={editLng ?? ""} onChange={(e) => setEditLng(e.target.value)} />
             </FilterField>
             <FilterField label="Location hint">
-              <input {...filterInputProps()} value={editHint} onChange={(e) => setEditHint(e.target.value)} />
+              <input {...filterInputProps()} value={editHint ?? ""} onChange={(e) => setEditHint(e.target.value)} />
             </FilterField>
           </div>
           <PrimaryButton
@@ -408,7 +367,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
               postJson(`/api/admin/discussions/${id}/location`, {
                 center_lat: Number(editLat),
                 center_lng: Number(editLng),
-                location_hint: editHint.trim() || null,
+                location_hint: (editHint ?? "").trim() || null,
               })
             }
           >
@@ -456,18 +415,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
       </div>
 
       <aside className="space-y-4">
-        <SectionCard title="Trust & ratings">
-          {ratings.rate_count === 0 ? (
-            <p className="text-sm text-zinc-500">No star ratings yet</p>
-          ) : (
-            <p className="text-4xl font-semibold text-zinc-50">
-              {ratings.avg_rate?.toFixed(1)}
-              <span className="ml-1 text-2xl text-amber-400">★</span>
-              <span className="ml-2 text-sm font-normal text-zinc-500">({ratings.rate_count})</span>
-            </p>
-          )}
-          <div className="mt-6 border-t border-zinc-800 pt-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Reports</p>
+        <SectionCard title="Reports">
             {reports.length === 0 ? (
               <p className="mt-2 text-sm text-zinc-500">No reports filed</p>
             ) : (
@@ -475,7 +423,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
                 {reports.map((r) => (
                   <li key={r.id} className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-medium capitalize text-zinc-300">{r.category.replace(/_/g, " ")}</span>
+                      <span className="text-xs font-medium capitalize text-zinc-300">{(r.category ?? "report").replace(/_/g, " ")}</span>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${REPORT_STATUS_STYLE[r.status] ?? "bg-zinc-800 text-zinc-400"}`}>
                         {r.status}
                       </span>
@@ -511,7 +459,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
                 ))}
               </ul>
             )}
-          </div>
         </SectionCard>
 
         <SectionCard title="Links">

@@ -10,9 +10,7 @@ import {
   FilterField,
   filterInputProps,
   formatRelativeTime,
-  formatShortDate,
   LifecyclePill,
-  LiveBadge,
   LoadMoreBar,
   personLabel,
   ReportsBadge,
@@ -30,8 +28,6 @@ const SORT_OPTIONS = [
   { value: "created_at", label: "Oldest" },
   { value: "-comment_count", label: "Most comments" },
   { value: "-engagement_score", label: "Top engagement" },
-  { value: "-live_last_go_live_at", label: "Recently live" },
-  { value: "-avg_rate", label: "Highest rated" },
   { value: "title", label: "A → Z" },
 ];
 
@@ -53,9 +49,6 @@ function CardSkeleton() {
 }
 
 function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly: boolean }) {
-  const rating =
-    d.rate_count > 0 && d.avg_rate != null ? `★ ${d.avg_rate.toFixed(1)} (${d.rate_count})` : "No ratings";
-
   return (
     <Link
       href={`/dashboard/discussions/${d.id}`}
@@ -63,7 +56,6 @@ function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly
     >
       <div className="flex flex-wrap items-center gap-2">
         <LifecyclePill status={d.lifecycle_status ?? "active"} />
-        <LiveBadge active={d.is_live} />
         {(flaggedOnly || d.report_count > 0) && <ReportsBadge count={d.report_count} />}
       </div>
 
@@ -85,8 +77,8 @@ function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly
 
       <div className="mt-4 grid grid-cols-3 gap-2 border-t border-zinc-800/80 pt-4 text-center">
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-zinc-500">Rating</p>
-          <p className="mt-0.5 text-xs font-semibold text-zinc-300">{rating}</p>
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500">Members</p>
+          <p className="mt-0.5 text-xs font-semibold text-zinc-300">{d.unique_participant_count ?? 0}</p>
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-wider text-zinc-500">Comments</p>
@@ -98,12 +90,7 @@ function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
-        <span>
-          {d.live_last_go_live_at
-            ? `Last live ${formatShortDate(d.live_last_go_live_at)}`
-            : "Never went live"}
-        </span>
+      <div className="mt-4 flex justify-end text-xs text-zinc-500">
         <span className="font-semibold text-emerald-400 opacity-0 transition group-hover:opacity-100">
           Open →
         </span>
@@ -129,7 +116,7 @@ function DiscussionTable({
             <th className="px-4 py-3">Creator</th>
             <th className="px-4 py-3">Location</th>
             <th className="px-4 py-3 text-right">Comments</th>
-            <th className="px-4 py-3 text-right">Rating</th>
+            <th className="px-4 py-3 text-right">Members</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-800/80">
@@ -143,15 +130,14 @@ function DiscussionTable({
               <td className="px-4 py-3">
                 <div className="flex flex-wrap gap-1">
                   <LifecyclePill status={d.lifecycle_status ?? "active"} />
-                  <LiveBadge active={d.is_live} />
                   {(flaggedOnly || d.report_count > 0) && <ReportsBadge count={d.report_count} />}
                 </div>
               </td>
               <td className="px-4 py-3 text-zinc-400">{personLabel(d.creator)}</td>
               <td className="max-w-[8rem] truncate px-4 py-3 text-zinc-500">{d.location_hint ?? "—"}</td>
               <td className="px-4 py-3 text-right tabular-nums text-zinc-300">{d.comment_count}</td>
-              <td className="px-4 py-3 text-right text-zinc-300">
-                {d.rate_count > 0 && d.avg_rate != null ? `★ ${d.avg_rate.toFixed(1)}` : "—"}
+              <td className="px-4 py-3 text-right tabular-nums text-zinc-300">
+                {d.unique_participant_count ?? 0}
               </td>
             </tr>
           ))}
@@ -168,7 +154,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [lifecycleStatus, setLifecycleStatus] = useState("");
-  const [liveOnly, setLiveOnly] = useState(false);
   const [sort, setSort] = useState("-created_at");
   const [page, setPage] = useState(1);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -203,27 +188,35 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
       const normalized = normalizeLifecycleFilterParam(lifecycleStatus);
       if (normalized) params.set("lifecycleStatus", normalized);
     }
-    if (liveOnly) params.set("liveOnly", "1");
     if (flaggedOnly) params.set("minReports", "1");
 
     fetch(`/api/admin/discussions?${params.toString()}`)
       .then(async (res) => {
-        const body = await res.json();
+        const text = await res.text();
+        let body: { error?: string; discussions?: DiscussionListItem[]; total?: number } = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch {
+          throw new Error(res.ok ? "Hubs returned an invalid response" : `Could not load hubs (${res.status})`);
+        }
         if (!res.ok) throw new Error(body.error || "Failed to load hubs");
-        setTotal(body.total);
+        setTotal(body.total ?? 0);
         setDiscussions((prev) => {
-          const incoming = body.discussions as DiscussionListItem[];
+          const incoming = (body.discussions ?? []) as DiscussionListItem[];
           if (page === 1) return incoming;
           const ids = new Set(prev.map((d) => d.id));
           return [...prev, ...incoming.filter((d) => !ids.has(d.id))];
         });
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load hubs"))
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Failed to load hubs";
+        setError(message === "Failed to fetch" ? "Could not reach the hubs API. Restart SterlingAdmin and refresh." : message);
+      })
       .finally(() => {
         setLoading(false);
         setLoadingMore(false);
       });
-  }, [search, city, creatorSearch, dateFrom, dateTo, lifecycleStatus, liveOnly, flaggedOnly, sort, page]);
+  }, [search, city, creatorSearch, dateFrom, dateTo, lifecycleStatus, flaggedOnly, sort, page]);
 
   useEffect(() => {
     setPage(1);
@@ -243,8 +236,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     creatorSearch.trim() ||
     dateFrom ||
     dateTo ||
-    lifecycleStatus ||
-    liveOnly
+    lifecycleStatus
   );
 
   function clearFilters() {
@@ -254,7 +246,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     setDateFrom("");
     setDateTo("");
     setLifecycleStatus("");
-    setLiveOnly(false);
     setPage(1);
   }
 
@@ -290,9 +281,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
         </FilterField>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <FilterChip active={liveOnly} onClick={() => { setLiveOnly((v) => !v); setPage(1); }} tone="rose">
-            Live now
-          </FilterChip>
           <FilterChip active={lifecycleStatus === "bootstrap"} onClick={() => applyLifecycleQuick("bootstrap")} tone="violet">
             Starting up
           </FilterChip>

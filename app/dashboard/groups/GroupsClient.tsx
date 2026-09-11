@@ -1,0 +1,793 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { ArrowRight, Search } from "lucide-react";
+import { toast } from "sonner";
+import {
+  Avatar,
+  formatRelativeTime,
+  personLabel,
+} from "@/app/dashboard/discussions/discussionUi";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type { AdminGroupListItem, MoveGroupsResponse } from "@/lib/groups/types";
+import { groupCategoryLabel } from "@/lib/groups/types";
+import type { SeededHubListItem, SeededPlaceKind } from "@/lib/seeded-hubs/types";
+
+const PAGE_SIZE = 20;
+
+const SORT_OPTIONS = [
+  { value: "-created_at", label: "Newest" },
+  { value: "created_at", label: "Oldest" },
+  { value: "title", label: "A → Z" },
+];
+
+const inputCls =
+  "w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/15 disabled:opacity-50";
+
+async function readApiJson<T = Record<string, unknown>>(res: Response): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      res.status === 404
+        ? "That admin API route is missing. Refresh the page and try again."
+        : "The server returned a page instead of data. Refresh and try again.",
+    );
+  }
+}
+
+function KindBadge({ kind }: { kind: SeededPlaceKind | null | undefined }) {
+  const neighborhood = kind === "neighborhood";
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+        neighborhood
+          ? "bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/25"
+          : "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/25"
+      }`}
+    >
+      {neighborhood ? "Nabe" : "City"}
+    </span>
+  );
+}
+
+function GroupAvatar({ group, size = "md" }: { group: AdminGroupListItem; size?: "sm" | "md" }) {
+  const dims = size === "sm" ? "h-8 w-8" : "h-10 w-10";
+  if (group.avatar_url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={group.avatar_url}
+        alt=""
+        className={`${dims} shrink-0 rounded-2xl object-cover ring-1 ring-zinc-800`}
+      />
+    );
+  }
+  return <Avatar id={group.id} person={{ full_name: group.title, username: null }} size={size} />;
+}
+
+function HubAvatar({ hub }: { hub: { id: string; title: string; avatar_url: string | null } }) {
+  if (hub.avatar_url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={hub.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-xl object-cover ring-1 ring-zinc-800" />
+    );
+  }
+  return <Avatar id={hub.id} person={{ full_name: hub.title, username: null }} size="sm" />;
+}
+
+export function GroupsClient() {
+  const [search, setSearch] = useState("");
+  const [hubId, setHubId] = useState("");
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [sort, setSort] = useState("-created_at");
+  const [page, setPage] = useState(1);
+
+  const [groups, setGroups] = useState<AdminGroupListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [seededHubs, setSeededHubs] = useState<SeededHubListItem[]>([]);
+  const [hubQuery, setHubQuery] = useState("");
+  const [targetHubId, setTargetHubId] = useState("");
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const selectedIds = useMemo(
+    () => Object.entries(selected).filter(([, on]) => on).map(([id]) => id),
+    [selected],
+  );
+  const selectedRows = useMemo(
+    () => groups.filter((group) => selected[group.id]),
+    [groups, selected],
+  );
+  const selectedPosts = selectedRows.reduce((sum, group) => sum + group.post_count, 0);
+  const selectedMembers = selectedRows.reduce((sum, group) => sum + group.member_count, 0);
+  const sourceHubTitles = [...new Set(selectedRows.map((group) => group.hub?.title).filter(Boolean) as string[])];
+  const targetHub = seededHubs.find((hub) => hub.id === targetHubId) ?? null;
+  const currentFilterHub = seededHubs.find((hub) => hub.id === hubId) ?? null;
+
+  const visibleDestinations = useMemo(() => {
+    const q = hubQuery.trim().toLowerCase();
+    const rows = q
+      ? seededHubs.filter((hub) => `${hub.title} ${hub.location_hint ?? ""}`.toLowerCase().includes(q))
+      : seededHubs;
+    return rows;
+  }, [seededHubs, hubQuery]);
+
+  const selectedHubIds = useMemo(
+    () => new Set(selectedRows.map((group) => group.discussion_id)),
+    [selectedRows],
+  );
+
+  const load = useCallback(() => {
+    const append = page > 1;
+    if (append) setLoadingMore(true);
+    else {
+      setLoading(true);
+      setError(null);
+    }
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(PAGE_SIZE),
+      sort,
+    });
+    if (search.trim()) params.set("search", search.trim());
+    if (hubId) params.set("hubId", hubId);
+    if (includeArchived) params.set("includeArchived", "1");
+
+    fetch(`/api/admin/groups?${params.toString()}`)
+      .then(async (res) => {
+        const body = await readApiJson<{
+          error?: string;
+          groups?: AdminGroupListItem[];
+          total?: number;
+        }>(res);
+        if (!res.ok) throw new Error(body.error || "Failed to load groups");
+        setTotal(body.total ?? 0);
+        setGroups((prev) => {
+          const incoming = body.groups ?? [];
+          if (page === 1) return incoming;
+          const ids = new Set(prev.map((group) => group.id));
+          return [...prev, ...incoming.filter((group) => !ids.has(group.id))];
+        });
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Failed to load groups";
+        setError(
+          message === "Failed to fetch"
+            ? "Could not reach the groups API. Restart SterlingAdmin and refresh."
+            : message,
+        );
+      })
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
+  }, [search, hubId, includeArchived, sort, page, refreshNonce]);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(load, 250);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [load]);
+
+  useEffect(() => {
+    fetch("/api/admin/seeded-hubs")
+      .then(async (res) => {
+        const body = await readApiJson<{ error?: string; hubs?: SeededHubListItem[] }>(res);
+        if (!res.ok) throw new Error(body.error || "Failed to load hubs");
+        setSeededHubs(body.hubs ?? []);
+      })
+      .catch(() => {});
+  }, []);
+
+  const hasMore = groups.length < total;
+  const allVisibleSelected = groups.length > 0 && groups.every((group) => selected[group.id]);
+  const canMove = selectedIds.length > 0 && Boolean(targetHub) && !busy;
+  const hasFilters = Boolean(search.trim() || hubId || includeArchived);
+
+  function toggleAllVisible() {
+    setSelected((prev) => {
+      const next = { ...prev };
+      const turnOn = !allVisibleSelected;
+      for (const group of groups) next[group.id] = turnOn;
+      return next;
+    });
+  }
+
+  function toggleGroup(id: string) {
+    setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  function clearSelection() {
+    setSelected({});
+  }
+
+  function requestMove() {
+    if (selectedIds.length === 0) {
+      setError("Select at least one group to move.");
+      return;
+    }
+    if (!targetHub) {
+      setError("Pick a destination hub on the left.");
+      return;
+    }
+    setError(null);
+    setConfirmOpen(true);
+  }
+
+  async function confirmMove() {
+    if (!targetHub) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/groups/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupIds: selectedIds, targetHubId: targetHub.id }),
+      });
+      const json = await readApiJson<MoveGroupsResponse & { error?: string }>(res);
+      if (!res.ok) throw new Error(json.error || "Failed to move groups");
+
+      const renamed = (json.moved ?? []).filter((item) => item.renamed);
+      if (json.moved_count > 0) {
+        toast.success(
+          `Moved ${json.moved_count} group${json.moved_count === 1 ? "" : "s"} to ${targetHub.title}`
+            + (json.skipped_count ? ` · ${json.skipped_count} already there` : ""),
+        );
+      } else if (json.skipped_count > 0 && json.error_count === 0) {
+        toast.message("Those groups are already in this hub.");
+      }
+      if (renamed.length) {
+        toast.message(
+          renamed.length === 1
+            ? `Renamed “${renamed[0].previous_title}” to “${renamed[0].group_title}” to avoid a name clash.`
+            : `Renamed ${renamed.length} groups to avoid name clashes.`,
+        );
+      }
+      if (json.error_count > 0) {
+        toast.error(json.errors[0]?.error || `${json.error_count} group(s) could not be moved.`);
+      }
+
+      setConfirmOpen(false);
+      setSelected({});
+      setPage(1);
+      setRefreshNonce((n) => n + 1);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to move groups";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const fromLabel =
+    sourceHubTitles.length === 0
+      ? "their current hubs"
+      : sourceHubTitles.length === 1
+        ? sourceHubTitles[0]
+        : `${sourceHubTitles.length} hubs`;
+
+  return (
+    <div className="-m-4 flex h-[calc(100dvh-4.75rem)] min-h-0 flex-col overflow-hidden sm:-m-6 sm:h-[calc(100dvh-5rem)] lg:-m-8">
+      {error && (
+        <div className="shrink-0 border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 sm:px-5">
+          {error}
+        </div>
+      )}
+
+      <div className="shrink-0 border-b border-zinc-800 bg-zinc-900/80 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400">Content</p>
+            <h1 className="mt-1 text-lg font-semibold text-zinc-50">Move groups</h1>
+            <p className="mt-0.5 max-w-2xl text-xs text-zinc-500">
+              Pick a destination hub, then check groups to nest them there. Posts travel with the group.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden items-center gap-2 sm:flex">
+              <Metric label="Groups" value={loading && page === 1 ? "…" : String(total)} />
+              <Metric label="Hubs" value={String(seededHubs.length)} />
+            </div>
+            <Link
+              href="/dashboard/seed-hubs"
+              className="rounded-xl border border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
+            >
+              Convert pins
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className="flex max-h-56 w-full shrink-0 flex-col border-b border-zinc-800 bg-zinc-900 lg:max-h-none lg:w-[18.5rem] lg:border-b-0 lg:border-r">
+          <div className="shrink-0 border-b border-zinc-800 px-3 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400">Destination</p>
+            <p className="mt-0.5 text-sm font-semibold text-zinc-50">
+              {targetHub ? targetHub.title : "Pick a hub"}
+            </p>
+            <div className="relative mt-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+              <input
+                className={`${inputCls} pl-9`}
+                value={hubQuery}
+                onChange={(e) => setHubQuery(e.target.value)}
+                placeholder="Search hubs"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {seededHubs.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <p className="text-sm font-medium text-zinc-300">No seeded hubs</p>
+                <p className="mt-1 text-xs text-zinc-500">Plant a city hub first, then move groups into it.</p>
+                <Link href="/dashboard/seed-hubs" className="mt-3 inline-block text-xs font-semibold text-emerald-400">
+                  Open Seed hubs
+                </Link>
+              </div>
+            ) : visibleDestinations.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-zinc-500">No hubs match.</p>
+            ) : (
+              visibleDestinations.map((hub) => {
+                const active = hub.id === targetHubId;
+                const isCurrent = selectedHubIds.size > 0 && selectedHubIds.size === 1 && selectedHubIds.has(hub.id);
+                return (
+                  <button
+                    key={hub.id}
+                    type="button"
+                    onClick={() => setTargetHubId(hub.id)}
+                    className={`flex w-full items-start gap-2.5 border-b border-zinc-800/70 px-3 py-2.5 text-left transition ${
+                      active ? "bg-emerald-500/10" : "hover:bg-zinc-950"
+                    }`}
+                  >
+                    <HubAvatar hub={hub} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className={`truncate text-sm font-semibold ${active ? "text-emerald-100" : "text-zinc-100"}`}>
+                          {hub.title}
+                        </span>
+                        <KindBadge kind={hub.place_kind} />
+                      </span>
+                      <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
+                        {hub.location_hint || "No place hint"}
+                      </span>
+                      <span className="mt-1 flex items-center gap-1.5 text-[11px] tabular-nums text-zinc-600">
+                        {hub.group_count} groups
+                        {isCurrent && (
+                          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-500/25">
+                            Current
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </aside>
+
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-zinc-950">
+          <div className="shrink-0 border-b border-zinc-800 px-4 py-2.5 sm:px-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[12rem] flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                <input
+                  ref={searchRef}
+                  className={`${inputCls} h-9 pl-9 text-xs`}
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Filter by group or hub name"
+                  autoComplete="off"
+                />
+              </div>
+              <select
+                className={`${inputCls} h-9 w-auto max-w-[11rem] py-1.5 text-xs`}
+                value={hubId}
+                onChange={(e) => {
+                  setHubId(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All current hubs</option>
+                {seededHubs.map((hub) => (
+                  <option key={hub.id} value={hub.id}>
+                    {hub.title}
+                  </option>
+                ))}
+              </select>
+              <select
+                className={`${inputCls} h-9 w-auto py-1.5 text-xs`}
+                value={sort}
+                onChange={(e) => {
+                  setSort(e.target.value);
+                  setPage(1);
+                }}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setIncludeArchived((v) => !v);
+                  setPage(1);
+                }}
+                className={`h-9 rounded-xl px-3 text-xs font-semibold ring-1 transition ${
+                  includeArchived
+                    ? "bg-zinc-100 text-zinc-900 ring-zinc-200"
+                    : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:text-zinc-200"
+                }`}
+              >
+                Archived
+              </button>
+              {hasFilters && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    setHubId("");
+                    setIncludeArchived(false);
+                    setPage(1);
+                    searchRef.current?.focus();
+                  }}
+                  className="h-9 text-xs font-semibold text-emerald-400 hover:text-emerald-300"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <p className="mt-2 text-[11px] text-zinc-500">
+              {loading && page === 1
+                ? "Loading groups…"
+                : `${groups.length.toLocaleString()} of ${total.toLocaleString()} shown`}
+              {currentFilterHub ? ` · in ${currentFilterHub.title}` : ""}
+              {selectedIds.length > 0 ? ` · ${selectedIds.length} selected` : ""}
+            </p>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-auto">
+            {loading && page === 1 ? (
+              <div className="space-y-0">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i} className="flex animate-pulse items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
+                    <div className="h-4 w-4 rounded bg-zinc-800" />
+                    <div className="h-10 w-10 rounded-2xl bg-zinc-800" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-4 w-1/3 rounded bg-zinc-800" />
+                      <div className="h-3 w-1/5 rounded bg-zinc-800" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : groups.length === 0 ? (
+              <div className="flex h-full items-center justify-center px-6 text-center">
+                <div>
+                  <p className="text-base font-medium text-zinc-200">
+                    {hasFilters ? "No groups match" : "No groups yet"}
+                  </p>
+                  <p className="mt-1 max-w-sm text-sm text-zinc-500">
+                    {hasFilters
+                      ? "Try a shorter name, another hub, or include archived groups."
+                      : "Groups appear after people start them in a seeded hub, or after you convert user pins."}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="divide-y divide-zinc-800/80 md:hidden">
+                  {groups.map((group) => {
+                    const checked = Boolean(selected[group.id]);
+                    const alreadyOnTarget = Boolean(targetHubId && group.discussion_id === targetHubId);
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => toggleGroup(group.id)}
+                        className={`flex w-full items-start gap-3 px-4 py-3 text-left ${
+                          checked ? "bg-emerald-500/10" : "hover:bg-zinc-900/70"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          readOnly
+                          className="mt-1 h-4 w-4 accent-emerald-400"
+                          tabIndex={-1}
+                        />
+                        <GroupAvatar group={group} />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className="truncate font-semibold text-zinc-100">{group.title}</span>
+                            {group.archived_at && <ArchivedPill />}
+                          </span>
+                          <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
+                            {group.hub?.title ?? "Unknown hub"} · {groupCategoryLabel(group.category)}
+                          </span>
+                          <span className="mt-1 block text-[11px] tabular-nums text-zinc-600">
+                            {group.member_count} members · {group.post_count} posts
+                            {alreadyOnTarget ? " · already in destination" : ""}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <table className="hidden min-w-full text-left text-sm md:table">
+                  <thead className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-900 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                    <tr>
+                      <th className="w-10 px-4 py-2">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={toggleAllVisible}
+                          className="h-4 w-4 accent-emerald-400"
+                          aria-label="Select all visible groups"
+                        />
+                      </th>
+                      <th className="px-3 py-2">Group</th>
+                      <th className="px-3 py-2">Current hub</th>
+                      <th className="px-3 py-2">Owner</th>
+                      <th className="px-3 py-2 text-right">Members</th>
+                      <th className="px-3 py-2 text-right">Posts</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/80">
+                    {groups.map((group) => {
+                      const checked = Boolean(selected[group.id]);
+                      const alreadyOnTarget = Boolean(targetHubId && group.discussion_id === targetHubId);
+                      return (
+                        <tr
+                          key={group.id}
+                          onClick={() => toggleGroup(group.id)}
+                          className={`cursor-pointer ${checked ? "bg-emerald-500/10" : "hover:bg-zinc-900/70"}`}
+                        >
+                          <td className="px-4 py-2.5">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleGroup(group.id);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-4 w-4 accent-emerald-400"
+                              aria-label={`Select ${group.title}`}
+                            />
+                          </td>
+                          <td className="max-w-[16rem] px-3 py-2.5">
+                            <div className="flex items-center gap-3">
+                              <GroupAvatar group={group} size="sm" />
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <p className="truncate font-semibold text-zinc-100">{group.title}</p>
+                                  {group.archived_at && <ArchivedPill />}
+                                  {alreadyOnTarget && (
+                                    <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-500/25">
+                                      Here
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-0.5 truncate text-[11px] text-zinc-500">
+                                  {groupCategoryLabel(group.category)} · {formatRelativeTime(group.created_at)}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="max-w-[11rem] px-3 py-2.5">
+                            {group.hub ? (
+                              <Link
+                                href={`/dashboard/discussions/${group.hub.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="block truncate font-medium text-zinc-200 hover:text-emerald-300"
+                              >
+                                {group.hub.title}
+                              </Link>
+                            ) : (
+                              <span className="text-zinc-500">Unknown hub</span>
+                            )}
+                            {group.hub?.location_hint && (
+                              <p className="truncate text-[11px] text-zinc-500">{group.hub.location_hint}</p>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-zinc-400">
+                            <p className="truncate text-xs">{personLabel(group.creator)}</p>
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-zinc-300">{group.member_count}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-zinc-300">{group.post_count}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {hasMore && (
+                  <div className="flex justify-center border-t border-zinc-800 py-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (loadingMore || loading) return;
+                        setPage((p) => p + 1);
+                      }}
+                      disabled={loadingMore}
+                      className="rounded-xl border border-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                    >
+                      {loadingMore
+                        ? "Loading…"
+                        : `Load more (${groups.length.toLocaleString()} of ${total.toLocaleString()})`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-zinc-800 bg-zinc-900 px-4 py-3 sm:px-5">
+        <div className="min-w-0 text-sm text-zinc-400">
+          {selectedIds.length > 0 ? (
+            <p className="flex flex-wrap items-center gap-x-1 gap-y-1">
+              <span className="font-semibold text-zinc-100">{selectedIds.length}</span>
+              group{selectedIds.length === 1 ? "" : "s"}
+              <span className="text-zinc-600">from</span>
+              <span className="font-semibold text-zinc-100">{fromLabel}</span>
+              <ArrowRight className="h-3.5 w-3.5 text-zinc-600" />
+              {targetHub ? (
+                <span className="font-semibold text-emerald-300">{targetHub.title}</span>
+              ) : (
+                <span className="text-zinc-500">pick a destination</span>
+              )}
+              {selectedRows.length > 0 && (
+                <span className="text-zinc-600">
+                  · {selectedMembers} members · {selectedPosts} posts
+                </span>
+              )}
+            </p>
+          ) : (
+            <p>
+              {targetHub
+                ? `Moving into ${targetHub.title}. Select groups in the list.`
+                : "Select a destination hub, then check groups to move."}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleAllVisible}
+            disabled={groups.length === 0}
+            className="rounded-xl border border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            {allVisibleSelected ? "Clear visible" : "Select visible"}
+          </button>
+          {selectedIds.length > 0 && (
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="rounded-xl border border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-400 hover:bg-zinc-800"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={requestMove}
+            disabled={!canMove}
+            className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? "Moving…" : `Move${selectedIds.length ? ` (${selectedIds.length})` : ""}`}
+          </button>
+        </div>
+      </div>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Move {selectedIds.length} group{selectedIds.length === 1 ? "" : "s"}?</DialogTitle>
+            <DialogDescription>
+              Posts stay on the group. Members are joined to the destination hub and also remain in the current one.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
+            <div className="flex items-center gap-3 text-sm">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">From</p>
+                <p className="truncate font-semibold text-zinc-100">{fromLabel}</p>
+              </div>
+              <ArrowRight className="h-4 w-4 shrink-0 text-zinc-600" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">To</p>
+                <p className="truncate font-semibold text-emerald-300">{targetHub?.title ?? "—"}</p>
+              </div>
+            </div>
+            {selectedRows.length > 0 && (
+              <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-zinc-800 pt-3">
+                {selectedRows.slice(0, 8).map((group) => (
+                  <li key={group.id} className="flex items-center justify-between gap-2 text-xs text-zinc-400">
+                    <span className="truncate text-zinc-200">{group.title}</span>
+                    <span className="shrink-0 tabular-nums text-zinc-500">
+                      {group.member_count} · {group.post_count}
+                    </span>
+                  </li>
+                ))}
+                {selectedIds.length > selectedRows.slice(0, 8).length && (
+                  <li className="text-xs text-zinc-500">
+                    +{selectedIds.length - Math.min(8, selectedRows.length)} more
+                  </li>
+                )}
+              </ul>
+            )}
+            <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+              If a name is already used in {targetHub?.title ?? "the destination"}, it will be renamed automatically.
+            </p>
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setConfirmOpen(false)}
+              disabled={busy}
+              className="rounded-xl border border-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void confirmMove()}
+              disabled={busy}
+              className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-40"
+            >
+              {busy ? "Moving…" : "Move groups"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-1.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{label}</p>
+      <p className="text-sm font-semibold tabular-nums text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function ArchivedPill() {
+  return (
+    <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400 ring-1 ring-zinc-700">
+      Archived
+    </span>
+  );
+}

@@ -48,7 +48,7 @@ function actionErrorMessage(error: unknown): string {
 // Edit panel
 // ---------------------------------------------------------------------------
 
-const ACCOUNT_ROLES = ["member", "creator", "moderator", "admin", "owner"];
+const ACCOUNT_ROLES = ["user", "moderator", "admin", "owner"];
 const USER_ROLES = ["member", "creator", "moderator", "admin", "support", "owner"];
 
 const ACCOUNT_ROLE_BADGE: Record<string, string> = {
@@ -56,6 +56,7 @@ const ACCOUNT_ROLE_BADGE: Record<string, string> = {
   admin: "bg-rose-500/15 text-rose-300",
   moderator: "bg-amber-500/15 text-amber-300",
   creator: "bg-blue-500/15 text-blue-300",
+  user: "bg-emerald-500/15 text-emerald-300",
   member: "bg-emerald-500/15 text-emerald-300",
 };
 
@@ -87,7 +88,7 @@ function userToForm(user: UserProfile) {
   return {
     full_name: user.full_name ?? "",
     username: user.username ?? "",
-    account_role: user.account_role ?? "member",
+    account_role: user.account_role ?? "user",
     role: user.role ?? "",
     bio: user.bio ?? "",
     phone_number: user.phone_number ?? "",

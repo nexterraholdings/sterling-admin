@@ -37,7 +37,10 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "Content",
     items: [
       { href: "/dashboard/discussions", label: "Hubs", short: "DS", description: "Area hubs and comments" },
+      { href: "/dashboard/seed-hubs", label: "Seed hubs", short: "SH", description: "Plant cities and merge old pins" },
+      { href: "/dashboard/groups", label: "Groups", short: "GR", description: "Move groups between hubs" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app messages" },
+      { href: "/dashboard/blog", label: "Blog", short: "BL", description: "Company blog posts" },
     ],
   },
 ];
@@ -165,29 +168,45 @@ function NavList({
 export function Sidebar({
   mobileOpen = false,
   onCloseMobile,
+  desktopCollapsed = false,
+  onToggleDesktop,
   role,
 }: {
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
+  desktopCollapsed?: boolean;
+  onToggleDesktop?: () => void;
   role: AdminRole;
 }) {
   const pathname = usePathname();
 
   return (
     <>
-      {/* Desktop sidebar */}
       <aside
-        className="hidden h-screen w-[304px] shrink-0 border-r border-zinc-800/80 bg-zinc-900 text-zinc-50 lg:flex lg:flex-col"
+        className={`h-screen shrink-0 border-r border-zinc-800/80 bg-zinc-900 text-zinc-50 transition-[width] duration-200 ${
+          desktopCollapsed ? "hidden" : "hidden lg:flex lg:w-[304px] lg:flex-col"
+        }`}
         style={{ position: "sticky", top: 0, height: "100vh" }}
       >
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="border-b border-zinc-800/80 px-4 py-5">
+          <div className="flex items-center justify-between gap-2 border-b border-zinc-800/80 px-4 py-5">
             <Link href="/dashboard" className="flex min-w-0 items-center gap-3">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-sm">
                 <Image src={logo} alt="Sterling" width={44} height={44} className="h-full w-full object-cover" priority />
               </div>
               <h2 className="truncate text-base font-semibold text-zinc-50">Admin Console</h2>
             </Link>
+            <button
+              type="button"
+              onClick={onToggleDesktop}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-400 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-50"
+              title="Hide menu"
+              aria-label="Hide menu"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+                <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+              </svg>
+            </button>
           </div>
 
           <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">

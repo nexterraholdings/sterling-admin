@@ -230,7 +230,7 @@ export async function fetchFlaggedAccounts(): Promise<FlaggedAccount[]> {
       email: profile.email,
       full_name: profile.full_name,
       username: profile.username,
-      account_role: profile.account_role ?? "member",
+      account_role: profile.account_role ?? "user",
       created_at: profile.created_at,
       moderationStrikeCount: strikes,
       suspicionScore,

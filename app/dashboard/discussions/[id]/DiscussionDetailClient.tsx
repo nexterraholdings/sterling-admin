@@ -7,7 +7,6 @@ import { DISCUSSION_HUB_TABS, type DiscussionHubTab } from "@/lib/discussions/ty
 import {
   Avatar,
   LifecyclePill,
-  LiveBadge,
   MetricPill,
   personLabel,
   ReportsBadge,
@@ -20,7 +19,7 @@ import type { DetailResponse } from "./discussionDetailTypes";
 
 const MAIN_SECTIONS = [
   { id: "overview" as const, label: "Overview", hint: "Lifecycle, map, settings" },
-  { id: "hub" as const, label: "Hub content", hint: "Feed, events, people" },
+  { id: "hub" as const, label: "Hub content", hint: "Feed, people, polls" },
   { id: "analytics" as const, label: "Analytics", hint: "Views and trends" },
 ];
 
@@ -39,11 +38,20 @@ export function DiscussionDetailClient({ id }: { id: string }) {
     setError(null);
     fetch(`/api/admin/discussions/${id}`)
       .then(async (res) => {
-        const body = await res.json();
+        const text = await res.text();
+        let body: { error?: string } & Partial<DetailResponse> = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch {
+          throw new Error(res.ok ? "Hub returned an invalid response" : `Could not load hub (${res.status})`);
+        }
         if (!res.ok) throw new Error(body.error || "Failed to load hub");
-        setData(body);
+        setData(body as DetailResponse);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load hub"))
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Failed to load hub";
+        setError(message === "Failed to fetch" ? "Could not reach the hub API. Restart SterlingAdmin and refresh." : message);
+      })
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -85,7 +93,7 @@ export function DiscussionDetailClient({ id }: { id: string }) {
   }
 
   const { discussion } = data;
-  const pendingReports = data.reports.filter((r) => r.status === "pending").length;
+  const pendingReports = (data.reports ?? []).filter((r) => r.status === "pending").length;
 
   return (
     <div className="space-y-6 pb-12">
@@ -102,7 +110,6 @@ export function DiscussionDetailClient({ id }: { id: string }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <LifecyclePill status={discussion.lifecycle_status} />
-              <LiveBadge active={discussion.is_live} />
               {pendingReports > 0 && <ReportsBadge count={pendingReports} />}
             </div>
             <h1 className="mt-3 text-2xl font-semibold leading-tight text-zinc-50 sm:text-3xl">{discussion.title}</h1>
@@ -135,17 +142,9 @@ export function DiscussionDetailClient({ id }: { id: string }) {
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3">
           <MetricPill label="Participants" value={String(discussion.unique_participant_count ?? 0)} />
           <MetricPill label="Comments" value={String(discussion.comment_count)} />
-          <MetricPill
-            label="Rating"
-            value={
-              discussion.rate_count > 0 && discussion.avg_rate != null
-                ? `★ ${discussion.avg_rate.toFixed(1)}`
-                : "—"
-            }
-          />
           <MetricPill label="Engagement" value={String(discussion.engagement_score ?? 0)} />
         </div>
 
@@ -193,18 +192,12 @@ export function DiscussionDetailClient({ id }: { id: string }) {
           <div className="flex gap-2 overflow-x-auto pb-1">
             {DISCUSSION_HUB_TABS.map((t) => {
               const active = hubTab === t.id;
-              const blurb =
-                t.id === "feed"
-                  ? "Opinions"
-                  : t.id === "live_chat"
-                    ? "Live chat"
-                    : t.label;
               return (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => setHubTab(t.id)}
-                  title={blurb}
+                  title={t.label}
                   className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold transition ${
                     active
                       ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30"

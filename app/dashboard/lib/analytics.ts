@@ -117,7 +117,7 @@ export async function fetchAnalytics() {
   // ── User role distribution ──
   const roleCounts: Record<string, number> = {};
   profiles.forEach((p: any) => {
-    const role = p.account_role ?? "member";
+    const role = p.account_role ?? "user";
     roleCounts[role] = (roleCounts[role] ?? 0) + 1;
   });
   const totalUsers = profiles.length;

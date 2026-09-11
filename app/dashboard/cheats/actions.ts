@@ -110,7 +110,7 @@ export async function fetchProfileItems(search?: string): Promise<ProfileItem[]>
     id: p.id,
     full_name: p.full_name ?? null,
     username: p.username ?? null,
-    account_role: p.account_role ?? "member",
+    account_role: p.account_role ?? "user",
     connections_count: (countMap[p.id] || 0) + Number(p.fake_connection_count ?? 0),
   }));
 }

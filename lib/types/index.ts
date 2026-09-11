@@ -1,7 +1,7 @@
 export type UUID = string;
 
 export type UserRole = "member" | "creator" | "moderator" | "admin" | "support" | "owner";
-export type AccountRole = "creator" | "member" | "moderator" | "admin" | "owner";
+export type AccountRole = "user" | "moderator" | "admin" | "owner";
 export type ModerationActionType = "suspend" | "ban" | "warning" | "review";
 export type NotificationType = "comment" | "report" | "message" | "system" | "community" | "alert";
 

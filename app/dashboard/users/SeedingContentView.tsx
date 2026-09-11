@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ function normalizeContentItem(item: AdminGroupContentItem): AdminGroupContentIte
 type ReplyContext = {
   replyAsLabel: string | null;
   onReply: (parentId: string, body: string) => Promise<boolean>;
+  onDelete: (commentId: string) => Promise<boolean>;
 };
 
 function ContentPost({
@@ -50,6 +51,7 @@ function ContentPost({
   const [showReply, setShowReply] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   async function submitReply() {
     const text = replyBody.trim();
@@ -63,6 +65,20 @@ function ContentPost({
       }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleDelete() {
+    const replyCount = (item.replies ?? []).length;
+    const warning = replyCount > 0
+      ? `Delete this post and its ${replyCount} repl${replyCount === 1 ? "y" : "ies"}? This can't be undone.`
+      : "Delete this post? This can't be undone.";
+    if (!window.confirm(warning)) return;
+    setDeleting(true);
+    try {
+      await ctx.onDelete(item.id);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -85,13 +101,23 @@ function ContentPost({
             />
           )}
 
-          <button
-            type="button"
-            onClick={() => setShowReply((v) => !v)}
-            className="mt-2 text-[11px] font-semibold text-blue-300 hover:text-blue-200"
-          >
-            {showReply ? "Cancel" : "Reply"}
-          </button>
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowReply((v) => !v)}
+              className="text-[11px] font-semibold text-blue-300 hover:text-blue-200"
+            >
+              {showReply ? "Cancel" : "Reply"}
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="text-[11px] font-semibold text-rose-400 hover:text-rose-300 disabled:opacity-50"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </button>
+          </div>
 
           {showReply && (
             <div className="mt-2 space-y-2">
@@ -137,6 +163,7 @@ export function SeedingContentView() {
   const [hubs, setHubs] = useState<SeededHubListItem[]>([]);
   const [hubsLoading, setHubsLoading] = useState(true);
   const [hubSearch, setHubSearch] = useState("");
+  const [hubSort, setHubSort] = useState<"popularity" | "name">("popularity");
   const [selectedHub, setSelectedHub] = useState<SeededHubListItem | null>(null);
 
   const [groups, setGroups] = useState<AdminGroupListItem[]>([]);
@@ -345,6 +372,32 @@ export function SeedingContentView() {
     }
   }
 
+  function removeContentItem(items: AdminGroupContentItem[], targetId: string): AdminGroupContentItem[] {
+    return items
+      .filter((item) => item.id !== targetId)
+      .map((item) =>
+        (item.replies ?? []).length > 0 ? { ...item, replies: removeContentItem(item.replies, targetId) } : item
+      );
+  }
+
+  async function handleDelete(commentId: string): Promise<boolean> {
+    if (!selectedGroup) return false;
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/groups/${encodeURIComponent(selectedGroup.id)}/content/${encodeURIComponent(commentId)}`,
+        { method: "DELETE" }
+      );
+      const payload = await readApiJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok) throw new Error(payload.error ?? "Failed to delete post");
+      setContent((prev) => removeContentItem(prev, commentId));
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete post");
+      return false;
+    }
+  }
+
   function insertReply(
     items: AdminGroupContentItem[],
     parentId: string,
@@ -379,13 +432,27 @@ export function SeedingContentView() {
       });
       const payload = await readApiJson<{ item?: AdminGroupContentItem; error?: string }>(res);
       if (!res.ok || !payload.item) throw new Error(payload.error ?? "Failed to publish reply");
-      setContent((prev) => insertReply(prev, parentId, normalizeContentItem(payload.item as AdminGroupContentItem)));
+      // The RPC flattens reply-to-a-reply onto the top-level comment (matching
+      // the app), so the returned item's parent_id may differ from the parentId
+      // we clicked "Reply" on — insert at the server-resolved location.
+      const created = normalizeContentItem(payload.item as AdminGroupContentItem);
+      setContent((prev) => insertReply(prev, created.parent_id ?? parentId, created));
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to publish reply");
       return false;
     }
   }
+
+  const sortedHubs = useMemo(() => {
+    const list = [...hubs];
+    if (hubSort === "popularity") {
+      list.sort((a, b) => b.group_count - a.group_count || a.title.localeCompare(b.title));
+    } else {
+      list.sort((a, b) => a.title.localeCompare(b.title));
+    }
+    return list;
+  }, [hubs, hubSort]);
 
   const selectedAccountLabel = proAccounts.find((a) => a.id === selectedAccountId)?.username ?? null;
 
@@ -452,13 +519,38 @@ export function SeedingContentView() {
                 placeholder="Search seeded hubs by name or location..."
                 className={inputCls}
               />
+              <div className="flex items-center gap-2 text-xs font-semibold text-zinc-500">
+                <span>Sort by</span>
+                <button
+                  type="button"
+                  onClick={() => setHubSort("popularity")}
+                  className={`rounded-full border px-2.5 py-1 transition ${
+                    hubSort === "popularity"
+                      ? "border-blue-500/50 bg-blue-500/10 text-blue-300"
+                      : "border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                  }`}
+                >
+                  Most groups
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHubSort("name")}
+                  className={`rounded-full border px-2.5 py-1 transition ${
+                    hubSort === "name"
+                      ? "border-blue-500/50 bg-blue-500/10 text-blue-300"
+                      : "border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                  }`}
+                >
+                  Name (A–Z)
+                </button>
+              </div>
               {hubsLoading ? (
                 <div className="p-6 text-center text-sm text-zinc-500">Loading hubs...</div>
               ) : hubs.length === 0 ? (
                 <div className="p-6 text-center text-sm text-zinc-500">No seeded hubs found.</div>
               ) : (
                 <div className="grid gap-2 md:grid-cols-2">
-                  {hubs.map((hub) => (
+                  {sortedHubs.map((hub) => (
                     <button
                       key={hub.id}
                       type="button"
@@ -653,6 +745,7 @@ export function SeedingContentView() {
                       ctx={{
                         replyAsLabel: selectedAccountLabel ? `@${selectedAccountLabel}` : null,
                         onReply: handleReply,
+                        onDelete: handleDelete,
                       }}
                     />
                   ))

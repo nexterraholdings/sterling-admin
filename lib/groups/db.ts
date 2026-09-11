@@ -2,18 +2,94 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import type { ProfileStub } from "@/lib/discussions/types";
 import { mapSeededHubRpcError } from "@/lib/seeded-hubs/types";
-import type {
-  AdminGroupContentItem,
-  AdminGroupHub,
-  AdminGroupListItem,
-  MoveGroupsResponse,
-  MovedGroupResult,
+import {
+  GROUP_CATEGORY_LABELS,
+  GROUP_VISIBILITY_VALUES,
+  type AdminGroupContentItem,
+  type AdminGroupHub,
+  type AdminGroupListItem,
+  type GroupVisibility,
+  type MoveGroupsResponse,
+  type MovedGroupResult,
 } from "@/lib/groups/types";
 
 const GROUP_SELECT =
-  "id,discussion_id,creator_id,title,description,category,categories,avatar_url,archived_at,created_at,updated_at";
+  "id,discussion_id,creator_id,title,description,category,categories,avatar_url,visibility,archived_at,created_at,updated_at";
 const GROUP_CORE_SELECT =
   "id,discussion_id,creator_id,title,description,archived_at,created_at";
+
+// A single, well-known "Sterling" profile that owns groups the admin dashboard
+// creates directly (no real user). Created lazily on first use so environments
+// that never touch this feature never get an extra profile row.
+const SYSTEM_GROUP_OWNER_EMAIL = "sterling-groups@sterlingtest.local";
+const SYSTEM_GROUP_OWNER_USERNAME = "sterling_official";
+
+async function findSystemGroupOwnerId(): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("id")
+    .eq("email", SYSTEM_GROUP_OWNER_EMAIL)
+    .maybeSingle();
+  if (error) return null;
+  return data?.id ? String(data.id) : null;
+}
+
+export async function getOrCreateSystemGroupOwner(): Promise<string> {
+  const existing = await findSystemGroupOwnerId();
+  if (existing) return existing;
+
+  const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+    email: SYSTEM_GROUP_OWNER_EMAIL,
+    password: `Sterling-${Math.random().toString(36).slice(2)}${Date.now()}`,
+    email_confirm: true,
+    user_metadata: { full_name: "Sterling" },
+  });
+  if (authError || !authData?.user) {
+    throw new Error(authError?.message ?? "Could not create the Sterling system account");
+  }
+  const userId = authData.user.id;
+
+  const { error: profileError } = await supabaseAdmin.from("profiles").upsert(
+    {
+      id: userId,
+      email: SYSTEM_GROUP_OWNER_EMAIL,
+      full_name: "Sterling",
+      username: SYSTEM_GROUP_OWNER_USERNAME,
+      account_role: "owner",
+      bio: "Official Sterling account. Owns groups the Sterling team creates directly.",
+      operating_markets: [],
+      main_goals: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+  if (profileError) {
+    await supabaseAdmin.auth.admin.deleteUser(userId, false).catch(() => undefined);
+    throw new Error(profileError.message);
+  }
+  return userId;
+}
+
+async function uploadGroupAvatar(
+  groupId: string,
+  buffer: Buffer,
+  contentType: string | null,
+): Promise<string> {
+  const storagePath = `${groupId}/avatar.jpg`;
+  const { error: uploadError } = await supabaseAdmin.storage.from("group-images").upload(storagePath, buffer, {
+    contentType: contentType || "image/jpeg",
+    upsert: true,
+    cacheControl: "3600",
+  });
+  if (uploadError) throw new Error(`Could not upload group photo: ${uploadError.message}`);
+  const { data: pub } = supabaseAdmin.storage.from("group-images").getPublicUrl(storagePath);
+  // The DB trigger that validates avatar_url requires the exact storage path
+  // with no query string, so drop the cache-busting suffix Supabase adds.
+  const publicUrl = String(pub?.publicUrl ?? "").split("?")[0];
+  if (!publicUrl) throw new Error("Could not resolve the uploaded group photo URL");
+  return publicUrl;
+}
 
 const SORT_COLUMNS = new Set(["created_at", "title"]);
 
@@ -234,24 +310,28 @@ function toListItem(
   creator: ProfileStub | null,
   memberCount: number,
   postCount: number,
+  systemOwnerId: string | null,
 ): AdminGroupListItem {
   const categoryRaw = row.category != null ? String(row.category) : null;
   const categories = parseCategories(row.categories, categoryRaw);
+  const creatorId = String(row.creator_id ?? "");
   return {
     id: String(row.id),
     discussion_id: String(row.discussion_id ?? ""),
-    creator_id: String(row.creator_id ?? ""),
+    creator_id: creatorId,
     title: String(row.title ?? ""),
     description: typeof row.description === "string" ? row.description : null,
     category: categories[0] ?? categoryRaw,
     categories,
     avatar_url: typeof row.avatar_url === "string" && row.avatar_url.trim() ? row.avatar_url : null,
+    visibility: typeof row.visibility === "string" && row.visibility ? row.visibility : "public",
     archived_at: typeof row.archived_at === "string" ? row.archived_at : null,
     created_at: String(row.created_at ?? ""),
     member_count: memberCount,
     post_count: postCount,
     hub,
     creator,
+    is_system_owned: Boolean(systemOwnerId) && creatorId === systemOwnerId,
   };
 }
 
@@ -300,11 +380,12 @@ export async function listAdminGroups(input: ListAdminGroupsInput): Promise<{
 
   const rows = (result.data ?? []) as Record<string, unknown>[];
   const ids = rows.map((row) => String(row.id));
-  const [hubs, creators, memberCounts, postCounts] = await Promise.all([
+  const [hubs, creators, memberCounts, postCounts, systemOwnerId] = await Promise.all([
     loadHubs(rows.map((row) => String(row.discussion_id ?? ""))),
     loadCreators(rows.map((row) => String(row.creator_id ?? ""))),
     countForGroups("discussion_group_members", ids),
     countForGroups("area_discussion_comments", ids),
+    findSystemGroupOwnerId(),
   ]);
 
   return {
@@ -316,12 +397,39 @@ export async function listAdminGroups(input: ListAdminGroupsInput): Promise<{
         creators.get(String(row.creator_id ?? "")) ?? null,
         memberCounts.get(id) ?? 0,
         postCounts.get(id) ?? 0,
+        systemOwnerId,
       );
     }),
     total: Number(result.count ?? rows.length),
     page,
     pageSize,
   };
+}
+
+async function getAdminGroupById(groupId: string): Promise<AdminGroupListItem> {
+  const { data: row, error } = await supabaseAdmin
+    .from("discussion_groups")
+    .select(GROUP_SELECT)
+    .eq("id", groupId)
+    .single();
+  if (error) throwDbError(error, "Failed to load group");
+
+  const [hubs, creators, memberCounts, postCounts, systemOwnerId] = await Promise.all([
+    loadHubs([String(row.discussion_id ?? "")]),
+    loadCreators([String(row.creator_id ?? "")]),
+    countForGroups("discussion_group_members", [groupId]),
+    countForGroups("area_discussion_comments", [groupId]),
+    findSystemGroupOwnerId(),
+  ]);
+
+  return toListItem(
+    row,
+    hubs.get(String(row.discussion_id ?? "")) ?? null,
+    creators.get(String(row.creator_id ?? "")) ?? null,
+    memberCounts.get(groupId) ?? 0,
+    postCounts.get(groupId) ?? 0,
+    systemOwnerId,
+  );
 }
 
 export async function moveGroupToHub(groupId: string, targetHubId: string): Promise<MovedGroupResult> {
@@ -557,6 +665,22 @@ export async function publishGroupContent(input: {
   return toContentItem(row, authors.get(input.accountId) ?? null);
 }
 
+export async function deleteGroupContent(groupId: string, commentId: string): Promise<void> {
+  const { data: comment, error: commentError } = await supabaseAdmin
+    .from("area_discussion_comments")
+    .select("id,group_id")
+    .eq("id", commentId)
+    .maybeSingle();
+  if (commentError) throwDbError(commentError, "Failed to load post");
+  if (!comment || String(comment.group_id ?? "") !== groupId) throw new Error("comment_not_found");
+
+  const { error } = await supabaseAdmin.rpc("admin_moderate_discussion_comment", {
+    p_comment_id: commentId,
+    p_action: "delete",
+  });
+  if (error) throwDbError(error, "Failed to delete post");
+}
+
 export async function moveGroupsToHub(groupIds: string[], targetHubId: string): Promise<MoveGroupsResponse> {
   const uniqueIds = [...new Set(groupIds.map((id) => String(id).trim()).filter(Boolean))];
   if (uniqueIds.length === 0) throw new Error("groups_required");
@@ -586,4 +710,153 @@ export async function moveGroupsToHub(groupIds: string[], targetHubId: string): 
     error_count: errors.length,
     skipped_count: skipped,
   };
+}
+
+const VALID_GROUP_CATEGORIES = new Set(Object.keys(GROUP_CATEGORY_LABELS));
+
+function sanitizeCategories(raw: string[] | undefined): string[] {
+  const cleaned = (raw ?? [])
+    .map((c) => String(c).trim().toLowerCase())
+    .filter((c) => VALID_GROUP_CATEGORIES.has(c));
+  const unique = [...new Set(cleaned)].slice(0, 4);
+  return unique.length > 0 ? unique : ["other"];
+}
+
+function sanitizeVisibility(raw: string | undefined): GroupVisibility {
+  const v = (raw ?? "public").trim().toLowerCase();
+  return (GROUP_VISIBILITY_VALUES as string[]).includes(v) ? (v as GroupVisibility) : "public";
+}
+
+export type SystemGroupAvatarInput = {
+  buffer: Buffer;
+  contentType: string | null;
+} | null;
+
+export type CreateSystemGroupInput = {
+  hubId: string;
+  title: string;
+  description?: string | null;
+  categories?: string[];
+  visibility?: string;
+  avatar?: SystemGroupAvatarInput;
+};
+
+/** Creates a group owned by the Sterling system account (no real user), always
+ * eligible for public discovery. Admin-only: bypasses the per-user creation
+ * cap and the "must be a hub participant" check real users go through. */
+export async function createSystemGroup(input: CreateSystemGroupInput): Promise<AdminGroupListItem> {
+  const title = input.title.trim();
+  if (!title || title.length > 40) throw new Error("discussion_group_title_invalid");
+
+  const { data: hub, error: hubError } = await supabaseAdmin
+    .from("area_discussions")
+    .select("id,origin")
+    .eq("id", input.hubId)
+    .maybeSingle();
+  if (hubError) throwDbError(hubError, "Failed to load hub");
+  if (!hub) throw new Error("discussion_not_found");
+  if (hub.origin !== "seeded") throw new Error("seeded_hub_required");
+
+  const ownerId = await getOrCreateSystemGroupOwner();
+  const uniqueTitle = await uniqueGroupTitle(input.hubId, title);
+  const categories = sanitizeCategories(input.categories);
+  const visibility = sanitizeVisibility(input.visibility);
+
+  const { data: row, error } = await supabaseAdmin
+    .from("discussion_groups")
+    .insert({
+      discussion_id: input.hubId,
+      creator_id: ownerId,
+      title: uniqueTitle,
+      description: input.description?.trim() || null,
+      category: categories[0],
+      categories,
+      visibility,
+    })
+    .select("id")
+    .single();
+  if (error) throwDbError(error, "Failed to create group");
+
+  await supabaseAdmin
+    .from("discussion_group_members")
+    .upsert({ group_id: row.id, user_id: ownerId, role: "owner" }, { onConflict: "group_id,user_id" });
+
+  if (input.avatar) {
+    const avatarUrl = await uploadGroupAvatar(row.id, input.avatar.buffer, input.avatar.contentType);
+    const { error: avatarError } = await supabaseAdmin
+      .from("discussion_groups")
+      .update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() })
+      .eq("id", row.id);
+    if (avatarError) throwDbError(avatarError, "Group created, but the photo could not be saved");
+  }
+
+  return getAdminGroupById(String(row.id));
+}
+
+export type UpdateSystemGroupInput = {
+  hubId?: string;
+  title?: string;
+  description?: string | null;
+  categories?: string[];
+  visibility?: string;
+  avatar?: SystemGroupAvatarInput;
+  clearAvatar?: boolean;
+};
+
+/** Full edit for a Sterling-owned group: title, description, categories,
+ * visibility, photo, and which hub it lives in. Refuses to touch a group a
+ * real user owns — this is not a general-purpose group editor. */
+export async function updateSystemGroup(
+  groupId: string,
+  input: UpdateSystemGroupInput,
+): Promise<AdminGroupListItem> {
+  const ownerId = await getOrCreateSystemGroupOwner();
+
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from("discussion_groups")
+    .select("id,creator_id,discussion_id")
+    .eq("id", groupId)
+    .maybeSingle();
+  if (existingError) throwDbError(existingError, "Failed to load group");
+  if (!existing) throw new Error("group_not_found");
+  if (String(existing.creator_id) !== ownerId) {
+    throw new Error("Only Sterling-owned groups can be edited here");
+  }
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+  if (input.title !== undefined) {
+    const title = input.title.trim();
+    if (!title || title.length > 40) throw new Error("discussion_group_title_invalid");
+    updates.title = title;
+  }
+  if (input.description !== undefined) {
+    updates.description = input.description?.trim() || null;
+  }
+  if (input.categories !== undefined) {
+    const categories = sanitizeCategories(input.categories);
+    updates.categories = categories;
+    updates.category = categories[0];
+  }
+  if (input.visibility !== undefined) {
+    updates.visibility = sanitizeVisibility(input.visibility);
+  }
+
+  if (input.clearAvatar) {
+    updates.avatar_url = null;
+  } else if (input.avatar) {
+    updates.avatar_url = await uploadGroupAvatar(groupId, input.avatar.buffer, input.avatar.contentType);
+  }
+
+  if (Object.keys(updates).length > 1) {
+    const { error } = await supabaseAdmin.from("discussion_groups").update(updates).eq("id", groupId);
+    if (error) throwDbError(error, "Failed to update group");
+  }
+
+  const targetHubId = input.hubId?.trim();
+  if (targetHubId && targetHubId !== String(existing.discussion_id)) {
+    await moveGroupToHub(groupId, targetHubId);
+  }
+
+  return getAdminGroupById(groupId);
 }

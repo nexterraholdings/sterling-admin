@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Search } from "lucide-react";
+import { ArrowRight, Pencil, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import {
   Avatar,
@@ -17,8 +17,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { AdminGroupListItem, MoveGroupsResponse } from "@/lib/groups/types";
-import { groupCategoryLabel } from "@/lib/groups/types";
+import type { AdminGroupListItem, GroupVisibility, MoveGroupsResponse } from "@/lib/groups/types";
+import { GROUP_CATEGORY_LABELS, GROUP_VISIBILITY_LABELS, GROUP_VISIBILITY_VALUES, groupCategoryLabel } from "@/lib/groups/types";
 import type { SeededHubListItem, SeededPlaceKind } from "@/lib/seeded-hubs/types";
 
 const PAGE_SIZE = 20;
@@ -105,6 +105,19 @@ export function GroupsClient() {
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
+
+  const [groupModalMode, setGroupModalMode] = useState<"create" | "edit" | null>(null);
+  const [editingGroup, setEditingGroup] = useState<AdminGroupListItem | null>(null);
+  const [formTitle, setFormTitle] = useState("");
+  const [formDescription, setFormDescription] = useState("");
+  const [formCategories, setFormCategories] = useState<string[]>(["other"]);
+  const [formVisibility, setFormVisibility] = useState<GroupVisibility>("public");
+  const [formHubId, setFormHubId] = useState("");
+  const [formHubQuery, setFormHubQuery] = useState("");
+  const [formAvatarFile, setFormAvatarFile] = useState<File | null>(null);
+  const [formAvatarPreview, setFormAvatarPreview] = useState<string | null>(null);
+  const [formClearAvatar, setFormClearAvatar] = useState(false);
+  const [savingGroup, setSavingGroup] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -281,6 +294,114 @@ export function GroupsClient() {
     }
   }
 
+  const formVisibleHubs = useMemo(() => {
+    const q = formHubQuery.trim().toLowerCase();
+    return q
+      ? seededHubs.filter((hub) => `${hub.title} ${hub.location_hint ?? ""}`.toLowerCase().includes(q))
+      : seededHubs;
+  }, [seededHubs, formHubQuery]);
+
+  function resetGroupForm() {
+    setFormTitle("");
+    setFormDescription("");
+    setFormCategories(["other"]);
+    setFormVisibility("public");
+    setFormHubId("");
+    setFormHubQuery("");
+    setFormAvatarFile(null);
+    setFormAvatarPreview((prev) => {
+      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setFormClearAvatar(false);
+  }
+
+  function openCreateGroup() {
+    resetGroupForm();
+    setEditingGroup(null);
+    setGroupModalMode("create");
+  }
+
+  function openEditGroup(group: AdminGroupListItem) {
+    setEditingGroup(group);
+    setFormTitle(group.title);
+    setFormDescription(group.description ?? "");
+    setFormCategories(group.categories.length ? group.categories : ["other"]);
+    setFormVisibility((group.visibility as GroupVisibility) || "public");
+    setFormHubId(group.discussion_id);
+    setFormHubQuery("");
+    setFormAvatarFile(null);
+    setFormAvatarPreview(group.avatar_url);
+    setFormClearAvatar(false);
+    setGroupModalMode("edit");
+  }
+
+  function closeGroupModal() {
+    setGroupModalMode(null);
+    setEditingGroup(null);
+  }
+
+  function toggleFormCategory(id: string) {
+    setFormCategories((prev) => {
+      if (prev.includes(id)) {
+        const next = prev.filter((c) => c !== id);
+        return next.length ? next : ["other"];
+      }
+      if (prev.length >= 4) return prev;
+      return [...prev.filter((c) => c !== "other"), id];
+    });
+  }
+
+  function handleFormAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    setFormAvatarFile(file);
+    setFormClearAvatar(false);
+    setFormAvatarPreview((prev) => {
+      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  }
+
+  async function saveGroup() {
+    const title = formTitle.trim();
+    if (!title) {
+      toast.error("Title is required");
+      return;
+    }
+    if (groupModalMode === "create" && !formHubId) {
+      toast.error("Pick a hub for this group.");
+      return;
+    }
+
+    const formData = new FormData();
+    if (groupModalMode === "create") formData.set("hubId", formHubId);
+    else if (formHubId) formData.set("hubId", formHubId);
+    formData.set("title", title);
+    formData.set("description", formDescription.trim());
+    formData.set("visibility", formVisibility);
+    for (const category of formCategories) formData.append("categories", category);
+    if (formAvatarFile) formData.set("avatar", formAvatarFile);
+    if (formClearAvatar) formData.set("clearAvatar", "1");
+
+    setSavingGroup(true);
+    try {
+      const url = groupModalMode === "create" ? "/api/admin/groups" : `/api/admin/groups/${editingGroup?.id}`;
+      const res = await fetch(url, { method: groupModalMode === "create" ? "POST" : "PATCH", body: formData });
+      const json = await readApiJson<{ group?: AdminGroupListItem; error?: string }>(res);
+      if (!res.ok || !json.group) throw new Error(json.error || "Failed to save group");
+
+      toast.success(groupModalMode === "create" ? `Created "${json.group.title}"` : `Saved "${json.group.title}"`);
+      closeGroupModal();
+      setPage(1);
+      setRefreshNonce((n) => n + 1);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save group";
+      toast.error(message);
+    } finally {
+      setSavingGroup(false);
+    }
+  }
+
   const fromLabel =
     sourceHubTitles.length === 0
       ? "their current hubs"
@@ -310,6 +431,14 @@ export function GroupsClient() {
               <Metric label="Groups" value={loading && page === 1 ? "…" : String(total)} />
               <Metric label="Hubs" value={String(seededHubs.length)} />
             </div>
+            <button
+              type="button"
+              onClick={openCreateGroup}
+              className="flex items-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              New Sterling group
+            </button>
             <Link
               href="/dashboard/seed-hubs"
               className="rounded-xl border border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
@@ -508,36 +637,47 @@ export function GroupsClient() {
                     const checked = Boolean(selected[group.id]);
                     const alreadyOnTarget = Boolean(targetHubId && group.discussion_id === targetHubId);
                     return (
-                      <button
+                      <div
                         key={group.id}
-                        type="button"
-                        onClick={() => toggleGroup(group.id)}
                         className={`flex w-full items-start gap-3 px-4 py-3 text-left ${
                           checked ? "bg-emerald-500/10" : "hover:bg-zinc-900/70"
                         }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          readOnly
-                          className="mt-1 h-4 w-4 accent-emerald-400"
-                          tabIndex={-1}
-                        />
-                        <GroupAvatar group={group} />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-2">
-                            <span className="truncate font-semibold text-zinc-100">{group.title}</span>
-                            {group.archived_at && <ArchivedPill />}
+                        <button type="button" onClick={() => toggleGroup(group.id)} className="flex flex-1 items-start gap-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            readOnly
+                            className="mt-1 h-4 w-4 accent-emerald-400"
+                            tabIndex={-1}
+                          />
+                          <GroupAvatar group={group} />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="truncate font-semibold text-zinc-100">{group.title}</span>
+                              {group.archived_at && <ArchivedPill />}
+                              {group.is_system_owned && <SterlingPill />}
+                            </span>
+                            <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
+                              {group.hub?.title ?? "Unknown hub"} · {groupCategoryLabel(group.category)}
+                            </span>
+                            <span className="mt-1 block text-[11px] tabular-nums text-zinc-600">
+                              {group.member_count} members · {group.post_count} posts
+                              {alreadyOnTarget ? " · already in destination" : ""}
+                            </span>
                           </span>
-                          <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
-                            {group.hub?.title ?? "Unknown hub"} · {groupCategoryLabel(group.category)}
-                          </span>
-                          <span className="mt-1 block text-[11px] tabular-nums text-zinc-600">
-                            {group.member_count} members · {group.post_count} posts
-                            {alreadyOnTarget ? " · already in destination" : ""}
-                          </span>
-                        </span>
-                      </button>
+                        </button>
+                        {group.is_system_owned && (
+                          <button
+                            type="button"
+                            onClick={() => openEditGroup(group)}
+                            className="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-300"
+                            aria-label={`Edit ${group.title}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -559,6 +699,7 @@ export function GroupsClient() {
                       <th className="px-3 py-2">Owner</th>
                       <th className="px-3 py-2 text-right">Members</th>
                       <th className="px-3 py-2 text-right">Posts</th>
+                      <th className="w-10 px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/80">
@@ -591,6 +732,7 @@ export function GroupsClient() {
                                 <div className="flex flex-wrap items-center gap-1.5">
                                   <p className="truncate font-semibold text-zinc-100">{group.title}</p>
                                   {group.archived_at && <ArchivedPill />}
+                                  {group.is_system_owned && <SterlingPill />}
                                   {alreadyOnTarget && (
                                     <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-500/25">
                                       Here
@@ -624,6 +766,21 @@ export function GroupsClient() {
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-zinc-300">{group.member_count}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-zinc-300">{group.post_count}</td>
+                          <td className="px-3 py-2.5 text-right">
+                            {group.is_system_owned && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEditGroup(group);
+                                }}
+                                className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-300"
+                                aria-label={`Edit ${group.title}`}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -771,6 +928,175 @@ export function GroupsClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={groupModalMode !== null} onOpenChange={(open) => !open && closeGroupModal()}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{groupModalMode === "edit" ? "Edit Sterling group" : "New Sterling group"}</DialogTitle>
+            <DialogDescription>
+              Owned by the Sterling system account, not a real user. Always eligible for public discovery.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3">
+            <div className="flex items-center gap-3">
+              <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
+                {formAvatarPreview && !formClearAvatar ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={formAvatarPreview} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-[10px] text-zinc-600">
+                    No photo
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="cursor-pointer text-xs font-semibold text-emerald-400 hover:text-emerald-300">
+                  {formAvatarFile ? "Change photo" : "Upload photo"}
+                  <input type="file" accept="image/*" className="hidden" onChange={handleFormAvatarChange} />
+                </label>
+                {(formAvatarPreview || formAvatarFile) && !formClearAvatar && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormAvatarFile(null);
+                      setFormAvatarPreview(null);
+                      setFormClearAvatar(true);
+                    }}
+                    className="text-left text-xs font-semibold text-zinc-500 hover:text-rose-300"
+                  >
+                    Remove photo
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Title
+              </label>
+              <input
+                value={formTitle}
+                onChange={(e) => setFormTitle(e.target.value)}
+                maxLength={40}
+                className={inputCls}
+                placeholder="Group name"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Description
+              </label>
+              <textarea
+                value={formDescription}
+                onChange={(e) => setFormDescription(e.target.value)}
+                maxLength={240}
+                className={`${inputCls} min-h-[64px] resize-y`}
+                placeholder="What's this group about?"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Categories (up to 4)
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(GROUP_CATEGORY_LABELS).map(([id, label]) => {
+                  const active = formCategories.includes(id);
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => toggleFormCategory(id)}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                        active
+                          ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-200"
+                          : "border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Visibility
+              </label>
+              <select
+                value={formVisibility}
+                onChange={(e) => setFormVisibility(e.target.value as GroupVisibility)}
+                className={inputCls}
+              >
+                {GROUP_VISIBILITY_VALUES.map((v) => (
+                  <option key={v} value={v}>
+                    {GROUP_VISIBILITY_LABELS[v]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Hub
+              </label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                <input
+                  value={formHubQuery}
+                  onChange={(e) => setFormHubQuery(e.target.value)}
+                  placeholder="Search hubs"
+                  className={`${inputCls} pl-9`}
+                />
+              </div>
+              <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1.5">
+                {formVisibleHubs.length === 0 ? (
+                  <p className="px-2 py-3 text-center text-xs text-zinc-500">No hubs match.</p>
+                ) : (
+                  formVisibleHubs.map((hub) => {
+                    const active = hub.id === formHubId;
+                    return (
+                      <button
+                        key={hub.id}
+                        type="button"
+                        onClick={() => setFormHubId(hub.id)}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs ${
+                          active ? "bg-emerald-500/10 text-emerald-200" : "text-zinc-300 hover:bg-zinc-900"
+                        }`}
+                      >
+                        <span className="truncate">{hub.title}</span>
+                        <span className="shrink-0 text-zinc-600">{hub.group_count} groups</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={closeGroupModal}
+              disabled={savingGroup}
+              className="rounded-xl border border-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveGroup()}
+              disabled={savingGroup}
+              className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-40"
+            >
+              {savingGroup ? "Saving…" : groupModalMode === "edit" ? "Save changes" : "Create group"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -788,6 +1114,14 @@ function ArchivedPill() {
   return (
     <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400 ring-1 ring-zinc-700">
       Archived
+    </span>
+  );
+}
+
+function SterlingPill() {
+  return (
+    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 ring-1 ring-emerald-500/25">
+      Sterling
     </span>
   );
 }

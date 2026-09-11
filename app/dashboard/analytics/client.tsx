@@ -3,34 +3,30 @@
 import { useState } from "react";
 import { Tabs } from "@/components/dashboard/Tabs";
 import { BarChart, HorizontalBar, ProgressRow } from "@/components/ui/BarChart";
-import type { RoleDistribution, CategoryBreakdown, TimeSeriesPoint } from "../lib/analytics";
+import type { RoleDistribution, CategoryBreakdown, TimeSeriesPoint, TrendingHub } from "../lib/analytics";
 
 type AnalyticsClientProps = {
   roleDistribution: RoleDistribution[];
   categoryBreakdown: CategoryBreakdown[];
-  reportTrend: TimeSeriesPoint[];
-  userTrend: TimeSeriesPoint[];
+  userGrowthTrend: TimeSeriesPoint[];
+  accountActivityTrend: TimeSeriesPoint[];
   postTrend: TimeSeriesPoint[];
-  eventTrend: TimeSeriesPoint[];
+  reportTrend: TimeSeriesPoint[];
   statusCounts: Record<string, number>;
   postTypeEntries: [string, number][];
   marketEntries: [string, number][];
-  eventTypeEntries: [string, number][];
+  trendingHubs: TrendingHub[];
   totalUsers: number;
   totalReports: number;
   totalPosts: number;
-  totalEvents: number;
-  upcomingEvents: number;
-  pastEvents: number;
-  privateEvents: number;
-  publicEvents: number;
+  activeAccounts: number;
 };
 
 const trendColors: Record<string, string> = {
+  growth: "rgb(59 130 246 / 0.8)",
+  activity: "rgb(139 92 246 / 0.8)",
+  posts: "rgb(16 185 129 / 0.8)",
   reports: "rgb(245 158 11 / 0.8)",
-  users: "rgb(59 130 246 / 0.8)",
-  posts: "rgb(139 92 246 / 0.8)",
-  events: "rgb(244 63 94 / 0.8)",
 };
 
 const statusColors: Record<string, string> = {
@@ -52,18 +48,69 @@ const statusLabels: Record<string, string> = {
 const listPalette = ["bg-blue-500", "bg-violet-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500", "bg-cyan-500"];
 
 export function AnalyticsClient(props: AnalyticsClientProps) {
-  const [trendTab, setTrendTab] = useState("reports");
+  const [trendTab, setTrendTab] = useState("growth");
 
   const trendData =
-    trendTab === "reports" ? props.reportTrend :
-    trendTab === "users" ? props.userTrend :
+    trendTab === "growth" ? props.userGrowthTrend :
+    trendTab === "activity" ? props.accountActivityTrend :
     trendTab === "posts" ? props.postTrend :
-    props.eventTrend;
+    props.reportTrend;
+
+  const maxHubActivity = Math.max(...props.trendingHubs.map((h) => h.recent_comment_count), 1);
 
   return (
     <div className="space-y-6">
-      {/* Row 1: User roles + Report categories */}
+      {/* Row 1: Trending hubs + User roles */}
       <div className="grid gap-6 xl:grid-cols-2">
+        {/* Trending hubs */}
+        <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-zinc-50">Trending hubs</h3>
+              <p className="mt-0.5 text-sm text-zinc-400">Ranked by comment activity, last 7 days</p>
+            </div>
+          </div>
+          <div className="mt-6 space-y-1">
+            {props.trendingHubs.length > 0 ? (
+              props.trendingHubs.map((hub, i) => (
+                <div key={hub.id} className="rounded-lg px-3 py-2 hover:bg-zinc-800">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-semibold text-zinc-400">
+                          {i + 1}
+                        </span>
+                        <span className="truncate text-sm font-medium text-zinc-300">{hub.title}</span>
+                      </div>
+                      {hub.location_hint && (
+                        <p className="ml-7 truncate text-xs text-zinc-500">{hub.location_hint}</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <span className="text-sm text-zinc-200">{hub.recent_comment_count.toLocaleString()}</span>
+                      <span className="w-16 text-right text-xs text-zinc-500">
+                        {hub.participant_count.toLocaleString()} members
+                      </span>
+                    </div>
+                  </div>
+                  <div className="ml-7 mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ease-out ${listPalette[i % listPalette.length]}`}
+                      style={{
+                        width: `${Math.max((hub.recent_comment_count / maxHubActivity) * 100, hub.recent_comment_count > 0 ? 2 : 0)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="flex h-32 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
+                No hubs yet
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* User role distribution */}
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
           <div className="flex items-center justify-between">
@@ -78,51 +125,32 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
             <HorizontalBar data={props.roleDistribution} />
           </div>
         </div>
-
-        {/* Report category breakdown */}
-        <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-zinc-50">Report categories</h3>
-              <p className="mt-0.5 text-sm text-zinc-400">
-                {props.totalReports.toLocaleString()} total reports
-              </p>
-            </div>
-          </div>
-          {props.categoryBreakdown.length > 0 ? (
-            <div className="mt-6">
-              <HorizontalBar data={props.categoryBreakdown} />
-            </div>
-          ) : (
-            <div className="mt-6 flex h-32 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
-              No reports filed yet
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* Row 2: Weekly trends + Report status */}
+      {/* Row 2: Trend chart + Report status */}
       <div className="grid gap-6 xl:grid-cols-[1.4fr_0.6fr]">
-        {/* Weekly trend chart */}
+        {/* Trend chart */}
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-zinc-50">7-day trend</h3>
+              <h3 className="text-lg font-semibold text-zinc-50">
+                {trendTab === "growth" ? "14-day trend" : "7-day trend"}
+              </h3>
               <p className="mt-0.5 text-sm text-zinc-400">
-                {trendTab === "reports" ? "Reports per day" :
-                 trendTab === "users" ? "New users per day" :
+                {trendTab === "growth" ? "New users per day" :
+                 trendTab === "activity" ? "Posts + hub comments per day" :
                  trendTab === "posts" ? "Posts per day" :
-                 "Events created per day"}
+                 "Reports per day"}
               </p>
             </div>
             <Tabs
               tabs={[
+                { id: "growth", label: "User growth", color: "blue" },
+                { id: "activity", label: "Activity", color: "violet" },
+                { id: "posts", label: "Posts", color: "emerald" },
                 { id: "reports", label: "Reports", color: "amber" },
-                { id: "users", label: "Users", color: "blue" },
-                { id: "posts", label: "Posts", color: "violet" },
-                { id: "events", label: "Events", color: "rose" },
               ]}
-              defaultTab="reports"
+              defaultTab="growth"
               variant="segmented"
               size="sm"
               onChange={setTrendTab}
@@ -138,7 +166,7 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
               />
             ) : (
               <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
-                No data this week
+                No data in this window
               </div>
             )}
           </div>
@@ -182,7 +210,7 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
         </div>
       </div>
 
-      {/* Row 3: Post types + Markets + Event types */}
+      {/* Row 3: Post types + Markets + Report categories */}
       <div className="grid gap-6 xl:grid-cols-3">
         {/* Post types */}
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
@@ -239,53 +267,29 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
           </div>
         </div>
 
-        {/* Event types */}
+        {/* Report categories */}
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-zinc-50">Event types</h3>
+          <h3 className="text-lg font-semibold text-zinc-50">Report categories</h3>
           <p className="mt-0.5 text-sm text-zinc-400">
-            {props.totalEvents.toLocaleString()} total
+            {props.totalReports.toLocaleString()} total reports
           </p>
           <div className="mt-6 space-y-1">
-            {props.eventTypeEntries.length > 0 ? (
-              props.eventTypeEntries.map(([type, count], i) => (
+            {props.categoryBreakdown.length > 0 ? (
+              props.categoryBreakdown.map((cat, i) => (
                 <ProgressRow
-                  key={type}
-                  label={type.replace(/_/g, " ")}
-                  count={count}
-                  percentage={props.totalEvents > 0 ? Math.round((count / props.totalEvents) * 100) : 0}
+                  key={cat.name}
+                  label={cat.name}
+                  count={cat.count}
+                  percentage={cat.percentage}
                   color={listPalette[i % listPalette.length]}
                 />
               ))
             ) : (
               <div className="flex h-24 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-800/60 text-sm text-zinc-500">
-                No events yet
+                No reports filed yet
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Row 4: Events overview */}
-      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-zinc-50">Events overview</h3>
-        <p className="mt-0.5 text-sm text-zinc-400">
-          Timing and visibility split across all events
-        </p>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            { label: "Upcoming", value: props.upcomingEvents, dot: "bg-emerald-400" },
-            { label: "Past", value: props.pastEvents, dot: "bg-zinc-600" },
-            { label: "Public", value: props.publicEvents, dot: "bg-blue-400" },
-            { label: "Private", value: props.privateEvents, dot: "bg-violet-400" },
-          ].map((item) => (
-            <div key={item.label} className="flex items-center justify-between rounded-xl bg-zinc-800/60 px-4 py-3">
-              <div className="flex items-center gap-2.5">
-                <span className={`h-2.5 w-2.5 rounded-full ${item.dot}`} />
-                <span className="text-sm font-medium text-zinc-300">{item.label}</span>
-              </div>
-              <span className="text-sm font-semibold text-zinc-50">{item.value.toLocaleString()}</span>
-            </div>
-          ))}
         </div>
       </div>
     </div>

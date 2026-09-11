@@ -139,6 +139,8 @@ export function mapSeededHubRpcError(message: string): string {
   if (lower.includes("ids_required")) return "Select at least one hub to convert.";
   if (lower.includes("seeded_ids_required")) return "Select at least one seeded hub.";
   if (lower.includes("discussion_group_title_taken")) return "A group with that name already exists in this hub.";
+  if (lower.includes("discussion_group_title_invalid")) return "Title must be 1–40 characters.";
+  if (lower.includes("discussion_group_category_invalid")) return "Pick a valid category.";
   if (lower.includes("group_not_found")) return "Group not found.";
   if (lower.includes("same_hub")) return "That group is already in this hub.";
   if (lower.includes("groups_required")) return "Select at least one group to move.";

@@ -8,6 +8,16 @@ export type AdminGroupHub = {
   avatar_url: string | null;
 };
 
+export type GroupVisibility = "public" | "restricted" | "private";
+
+export const GROUP_VISIBILITY_VALUES: GroupVisibility[] = ["public", "restricted", "private"];
+
+export const GROUP_VISIBILITY_LABELS: Record<GroupVisibility, string> = {
+  public: "Public — anyone can join",
+  restricted: "Restricted — request to join",
+  private: "Private — invite only",
+};
+
 export type AdminGroupListItem = {
   id: string;
   discussion_id: string;
@@ -17,12 +27,15 @@ export type AdminGroupListItem = {
   category: string | null;
   categories: string[];
   avatar_url: string | null;
+  visibility: string;
   archived_at: string | null;
   created_at: string;
   member_count: number;
   post_count: number;
   hub: AdminGroupHub | null;
   creator: ProfileStub | null;
+  /** True when the group is owned by the Sterling system account rather than a real user. */
+  is_system_owned: boolean;
 };
 
 export type MovedGroupResult = {

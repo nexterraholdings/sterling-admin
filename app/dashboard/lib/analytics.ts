@@ -4,6 +4,14 @@ import { requireAdmin, ANALYST_ROLES } from "./dal";
 export type RoleDistribution = { name: string; count: number; percentage: number; color: string };
 export type CategoryBreakdown = { name: string; count: number; percentage: number; color: string };
 export type TimeSeriesPoint = { label: string; value: number };
+export type TrendingHub = {
+  id: string;
+  title: string;
+  location_hint: string | null;
+  recent_comment_count: number;
+  total_comment_count: number;
+  participant_count: number;
+};
 
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-rose-500",
@@ -44,21 +52,38 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+function dailyTrend(rows: { created_at: string }[], days: number, now: Date): TimeSeriesPoint[] {
+  const byDate: Record<string, number> = {};
+  const order: string[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    byDate[key] = 0;
+    order.push(key);
+  }
+  rows.forEach((row) => {
+    const d = new Date(row.created_at);
+    const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    if (byDate[key] !== undefined) byDate[key]++;
+  });
+  return order.map((label) => ({ label, value: byDate[label] }));
+}
+
 export async function fetchAnalytics() {
   await requireAdmin(ANALYST_ROLES);
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
   const [
     profilesRes,
     reportsRes,
     postsRes,
-    eventsRes,
+    hubsRes,
     reportsWeekRes,
-    profilesWeekRes,
+    profilesGrowthRes,
     postsWeekRes,
-    eventsWeekRes,
+    commentsWeekRes,
   ] = await Promise.all([
     // All profiles for role distribution
     supabaseAdmin
@@ -70,15 +95,17 @@ export async function fetchAnalytics() {
       .from("reports")
       .select("category,status,report_type,created_at"),
 
-    // All posts for post type distribution
+    // All posts for post type distribution + author for activity
     supabaseAdmin
       .from("posts")
-      .select("post_type,likes_count,comments_count,created_at"),
+      .select("post_type,author_id,created_at"),
 
-    // Events
+    // Hubs (area_discussions) for the trending list
     supabaseAdmin
-      .from("events")
-      .select("event_type,is_private,attendee_count,starts_at,created_at"),
+      .from("area_discussions")
+      .select("id,title,location_hint,comment_count,unique_participant_count")
+      .order("comment_count", { ascending: false })
+      .limit(200),
 
     // Reports this week for trend
     supabaseAdmin
@@ -86,33 +113,34 @@ export async function fetchAnalytics() {
       .select("created_at")
       .gte("created_at", weekAgo.toISOString()),
 
-    // Profiles this week for trend
+    // Profiles for the last two weeks, to chart daily growth
     supabaseAdmin
       .from("profiles")
       .select("created_at")
-      .gte("created_at", monthAgo.toISOString()),
+      .gte("created_at", twoWeeksAgo.toISOString()),
 
-    // Posts this week for trend
+    // Posts this week for trend + activity
     supabaseAdmin
       .from("posts")
-      .select("created_at")
+      .select("created_at,author_id")
       .gte("created_at", weekAgo.toISOString()),
 
-    // Events this week for trend
+    // Hub comments this week for trending hubs + activity
     supabaseAdmin
-      .from("events")
-      .select("created_at")
-      .gte("created_at", weekAgo.toISOString()),
+      .from("area_discussion_comments")
+      .select("discussion_id,created_at,author_id")
+      .gte("created_at", weekAgo.toISOString())
+      .limit(5000),
   ]);
 
   const profiles = (profilesRes.data ?? []) as any[];
   const reports = (reportsRes.data ?? []) as any[];
   const posts = (postsRes.data ?? []) as any[];
-  const events = (eventsRes.data ?? []) as any[];
+  const hubs = (hubsRes.data ?? []) as any[];
   const reportsWeek = (reportsWeekRes.data ?? []) as any[];
-  const profilesWeek = (profilesWeekRes.data ?? []) as any[];
+  const profilesGrowth = (profilesGrowthRes.data ?? []) as any[];
   const postsWeek = (postsWeekRes.data ?? []) as any[];
-  const eventsWeek = (eventsWeekRes.data ?? []) as any[];
+  const commentsWeek = (commentsWeekRes.data ?? []) as any[];
 
   // ── User role distribution ──
   const roleCounts: Record<string, number> = {};
@@ -170,96 +198,104 @@ export async function fetchAnalytics() {
     });
   });
 
-  // ── Weekly trend (reports per day this week) ──
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const reportsByDay: Record<string, number> = {};
-  const postsByDay: Record<string, number> = {};
-  const usersByDay: Record<string, number> = {};
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-    const key = dayNames[d.getDay()];
-    reportsByDay[key] = 0;
-    postsByDay[key] = 0;
-    usersByDay[key] = 0;
-  }
-
-  reportsWeek.forEach((r: any) => {
-    const d = new Date(r.created_at);
-    const key = dayNames[d.getDay()];
-    if (reportsByDay[key] !== undefined) reportsByDay[key]++;
-  });
-  postsWeek.forEach((p: any) => {
-    const d = new Date(p.created_at);
-    const key = dayNames[d.getDay()];
-    if (postsByDay[key] !== undefined) postsByDay[key]++;
-  });
-  profilesWeek.forEach((p: any) => {
-    const d = new Date(p.created_at);
-    const key = dayNames[d.getDay()];
-    if (usersByDay[key] !== undefined) usersByDay[key]++;
-  });
-
-  const reportTrend: TimeSeriesPoint[] = Object.entries(reportsByDay).map(([label, value]) => ({ label, value }));
-  const postTrend: TimeSeriesPoint[] = Object.entries(postsByDay).map(([label, value]) => ({ label, value }));
-  const userTrend: TimeSeriesPoint[] = Object.entries(usersByDay).map(([label, value]) => ({ label, value }));
-
   // ── Moderation stats ──
   const usersWithStrikes = profiles.filter((p: any) => (p.moderation_strike_count ?? 0) > 0).length;
   const avgStrikes = profiles.length > 0
     ? (profiles.reduce((sum: number, p: any) => sum + (p.moderation_strike_count ?? 0), 0) / profiles.length).toFixed(1)
     : "0";
 
-  // ── Event stats ──
-  const totalEvents = events.length;
-  const upcomingEvents = events.filter((e: any) => e.starts_at && new Date(e.starts_at) >= now).length;
-  const pastEvents = totalEvents - upcomingEvents;
-  const privateEvents = events.filter((e: any) => e.is_private).length;
-  const publicEvents = totalEvents - privateEvents;
-  const avgAttendees = totalEvents > 0
-    ? (events.reduce((sum: number, e: any) => sum + (e.attendee_count ?? 0), 0) / totalEvents).toFixed(1)
-    : "0";
-
-  const eventTypeCounts: Record<string, number> = {};
-  events.forEach((e: any) => {
-    const t = e.event_type ?? "other";
-    eventTypeCounts[t] = (eventTypeCounts[t] ?? 0) + 1;
-  });
-
-  const eventsByDay: Record<string, number> = {};
+  // ── Weekly trends (reports, posts) ──
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const reportsByDay: Record<string, number> = {};
+  const postsByDay: Record<string, number> = {};
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-    eventsByDay[dayNames[d.getDay()]] = 0;
-  }
-  eventsWeek.forEach((e: any) => {
-    const d = new Date(e.created_at);
     const key = dayNames[d.getDay()];
-    if (eventsByDay[key] !== undefined) eventsByDay[key]++;
+    reportsByDay[key] = 0;
+    postsByDay[key] = 0;
+  }
+  reportsWeek.forEach((r: any) => {
+    const key = dayNames[new Date(r.created_at).getDay()];
+    if (reportsByDay[key] !== undefined) reportsByDay[key]++;
   });
-  const eventTrend: TimeSeriesPoint[] = Object.entries(eventsByDay).map(([label, value]) => ({ label, value }));
+  postsWeek.forEach((p: any) => {
+    const key = dayNames[new Date(p.created_at).getDay()];
+    if (postsByDay[key] !== undefined) postsByDay[key]++;
+  });
+  const reportTrend: TimeSeriesPoint[] = Object.entries(reportsByDay).map(([label, value]) => ({ label, value }));
+  const postTrend: TimeSeriesPoint[] = Object.entries(postsByDay).map(([label, value]) => ({ label, value }));
+
+  // ── User growth: daily new signups over the last 14 days ──
+  const userGrowthTrend = dailyTrend(profilesGrowth, 14, now);
+  const newUsersThisWeek = profilesGrowth.filter((p: any) => new Date(p.created_at) >= weekAgo).length;
+  const newUsersLastWeek = profilesGrowth.filter(
+    (p: any) => new Date(p.created_at) >= twoWeeksAgo && new Date(p.created_at) < weekAgo,
+  ).length;
+  const userGrowthPct = newUsersLastWeek > 0
+    ? Math.round(((newUsersThisWeek - newUsersLastWeek) / newUsersLastWeek) * 100)
+    : newUsersThisWeek > 0 ? 100 : 0;
+
+  // ── Account activity: posts + hub comments per day, distinct active accounts ──
+  const activityByDay: Record<string, number> = {};
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    activityByDay[dayNames[d.getDay()]] = 0;
+  }
+  postsWeek.forEach((p: any) => {
+    const key = dayNames[new Date(p.created_at).getDay()];
+    if (activityByDay[key] !== undefined) activityByDay[key]++;
+  });
+  commentsWeek.forEach((c: any) => {
+    const key = dayNames[new Date(c.created_at).getDay()];
+    if (activityByDay[key] !== undefined) activityByDay[key]++;
+  });
+  const accountActivityTrend: TimeSeriesPoint[] = Object.entries(activityByDay).map(([label, value]) => ({ label, value }));
+
+  const activeAccountIds = new Set<string>();
+  postsWeek.forEach((p: any) => { if (p.author_id) activeAccountIds.add(String(p.author_id)); });
+  commentsWeek.forEach((c: any) => { if (c.author_id) activeAccountIds.add(String(c.author_id)); });
+  const activeAccounts = activeAccountIds.size;
+
+  // ── Trending hubs: ranked by comment activity in the last 7 days, falling
+  // back to lifetime comment_count when nothing has happened recently ──
+  const recentCommentsByHub: Record<string, number> = {};
+  commentsWeek.forEach((c: any) => {
+    const id = String(c.discussion_id ?? "");
+    if (!id) return;
+    recentCommentsByHub[id] = (recentCommentsByHub[id] ?? 0) + 1;
+  });
+  const trendingHubs: TrendingHub[] = hubs
+    .map((h: any) => ({
+      id: String(h.id),
+      title: String(h.title ?? "Untitled hub"),
+      location_hint: h.location_hint ?? null,
+      recent_comment_count: recentCommentsByHub[String(h.id)] ?? 0,
+      total_comment_count: h.comment_count ?? 0,
+      participant_count: h.unique_participant_count ?? 0,
+    }))
+    .sort((a, b) => (b.recent_comment_count - a.recent_comment_count) || (b.total_comment_count - a.total_comment_count))
+    .slice(0, 8);
 
   return {
     totalUsers,
-    totalReports,
-    totalPosts,
     roleDistribution,
+    totalReports,
     categoryBreakdown,
     statusCounts,
+    totalPosts,
     postTypeCounts,
     marketCounts,
     reportTrend,
     postTrend,
-    userTrend,
     usersWithStrikes,
     avgStrikes,
-    totalEvents,
-    upcomingEvents,
-    pastEvents,
-    privateEvents,
-    publicEvents,
-    avgAttendees,
-    eventTypeCounts,
-    eventTrend,
+    userGrowthTrend,
+    newUsersThisWeek,
+    newUsersLastWeek,
+    userGrowthPct,
+    accountActivityTrend,
+    activeAccounts,
+    trendingHubs,
   };
 }
 

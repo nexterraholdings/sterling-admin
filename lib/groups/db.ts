@@ -8,10 +8,13 @@ import {
   type AdminGroupContentItem,
   type AdminGroupHub,
   type AdminGroupListItem,
+  type AdminGroupMember,
   type GroupVisibility,
   type MoveGroupsResponse,
   type MovedGroupResult,
 } from "@/lib/groups/types";
+
+const PROP_ACCOUNT_EMAIL_SUFFIX = "@sterlingtest.local";
 
 const GROUP_SELECT =
   "id,discussion_id,creator_id,title,description,category,categories,avatar_url,visibility,archived_at,created_at,updated_at";
@@ -406,7 +409,7 @@ export async function listAdminGroups(input: ListAdminGroupsInput): Promise<{
   };
 }
 
-async function getAdminGroupById(groupId: string): Promise<AdminGroupListItem> {
+export async function getAdminGroupById(groupId: string): Promise<AdminGroupListItem> {
   const { data: row, error } = await supabaseAdmin
     .from("discussion_groups")
     .select(GROUP_SELECT)
@@ -663,6 +666,82 @@ export async function publishGroupContent(input: {
     created_at: data.out_created_at,
   };
   return toContentItem(row, authors.get(input.accountId) ?? null);
+}
+
+export async function listGroupMembers(groupId: string): Promise<AdminGroupMember[]> {
+  const { data, error } = await supabaseAdmin
+    .from("discussion_group_members")
+    .select("user_id,role")
+    .eq("group_id", groupId)
+    .limit(500);
+  if (error) throwDbError(error, "Failed to load group members");
+
+  const rows = (data ?? []) as Array<{ user_id: string; role: string | null }>;
+  const ids = [...new Set(rows.map((r) => String(r.user_id)))];
+  const profiles = new Map<
+    string,
+    { id: string; full_name: string | null; username: string | null; avatar_url: string | null; email: string | null }
+  >();
+  if (ids.length) {
+    const { data: profileRows, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("id,full_name,username,avatar_url,email")
+      .in("id", ids);
+    if (profileError) throwDbError(profileError, "Failed to load member profiles");
+    for (const p of profileRows ?? []) profiles.set(String(p.id), p as never);
+  }
+
+  return rows.map((r) => {
+    const profile = profiles.get(String(r.user_id));
+    const email = profile?.email ? String(profile.email).toLowerCase() : "";
+    return {
+      user_id: String(r.user_id),
+      role: r.role ?? "member",
+      is_prop_account: email.endsWith(PROP_ACCOUNT_EMAIL_SUFFIX),
+      profile: profile
+        ? { id: profile.id, full_name: profile.full_name, username: profile.username, avatar_url: profile.avatar_url }
+        : null,
+    };
+  });
+}
+
+export async function addGroupMember(groupId: string, userId: string, role = "member"): Promise<void> {
+  const { data: group, error: groupError } = await supabaseAdmin
+    .from("discussion_groups")
+    .select("id,discussion_id")
+    .eq("id", groupId)
+    .maybeSingle();
+  if (groupError) throwDbError(groupError, "Failed to load group");
+  if (!group) throw new Error("group_not_found");
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select("id")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profileError) throwDbError(profileError, "Failed to verify account");
+  if (!profile) throw new Error("account_not_found");
+
+  const { error } = await supabaseAdmin
+    .from("discussion_group_members")
+    .upsert({ group_id: groupId, user_id: userId, role }, { onConflict: "group_id,user_id" });
+  if (error) throwDbError(error, "Failed to add member");
+
+  const { error: participantError } = await supabaseAdmin
+    .from("area_discussion_participants")
+    .upsert({ discussion_id: group.discussion_id, user_id: userId }, { onConflict: "discussion_id,user_id" });
+  if (participantError && !isMissingSchemaError(participantError)) {
+    console.error("[groups] failed to join member to hub participants:", participantError.message);
+  }
+}
+
+export async function removeGroupMember(groupId: string, userId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("discussion_group_members")
+    .delete()
+    .eq("group_id", groupId)
+    .eq("user_id", userId);
+  if (error) throwDbError(error, "Failed to remove member");
 }
 
 export async function deleteGroupContent(groupId: string, commentId: string): Promise<void> {

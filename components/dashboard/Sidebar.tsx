@@ -29,7 +29,6 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { href: "/dashboard/users", label: "Users", short: "US", description: "Profiles and accounts" },
       { href: "/dashboard/moderators", label: "Moderators", short: "MD", description: "Dashboard access and roles" },
-      { href: "/dashboard/sterling-star", label: "Sterling Star", short: "SS", description: "Creator program applicants" },
       { href: "/dashboard/moderation", label: "Moderation", short: "MO", description: "Reports, flagged accounts, and bans" },
     ],
   },
@@ -38,7 +37,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { href: "/dashboard/discussions", label: "Hubs", short: "DS", description: "Area hubs and comments" },
       { href: "/dashboard/seed-hubs", label: "Seed hubs", short: "SH", description: "Plant cities and merge old pins" },
-      { href: "/dashboard/groups", label: "Groups", short: "GR", description: "Move groups between hubs" },
+      { href: "/dashboard/groups", label: "Groups", short: "GR", description: "Seed groups with prop members and content" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app messages" },
       { href: "/dashboard/blog", label: "Blog", short: "BL", description: "Company blog posts" },
     ],

@@ -14,6 +14,7 @@ create or replace function public.admin_create_area_discussion_comment(
   p_body text,
   p_parent_id uuid default null
 )
+
 returns table (
   out_id uuid,
   out_author_id uuid,

@@ -13,6 +13,7 @@ import {
   type SeededPlaceKind,
 } from "@/lib/seeded-hubs/types";
 import { isHubNameUniqueViolation, prepareUniqueHubName } from "@/lib/hub-name-db";
+import { hubNamesCollide } from "@/lib/hub-name";
 
 const SEEDED_SELECT =
   "id,title,description,center_lat,center_lng,radius_miles,location_hint,place_kind,place_key,avatar_url,unique_participant_count,comment_count,created_at,origin,seeded_visible";
@@ -117,6 +118,25 @@ export async function listSeededHubs(search: string | null): Promise<SeededHubLi
   }
 
   return hubs.map((hub) => toSeededItem(hub, groupCounts.get(hub.id) ?? 0));
+}
+
+export async function getSeededHubById(id: string): Promise<SeededHubListItem | null> {
+  const { data, error } = await supabaseAdmin
+    .from("area_discussions")
+    .select(SEEDED_SELECT)
+    .eq("id", id)
+    .eq("origin", "seeded")
+    .maybeSingle();
+  if (error) throwDbError(error, "Failed to load hub");
+  if (!data) return null;
+
+  const { count } = await supabaseAdmin
+    .from("discussion_groups")
+    .select("id", { count: "exact", head: true })
+    .eq("discussion_id", id)
+    .is("archived_at", null);
+
+  return toSeededItem(data as HubRow, count ?? 0);
 }
 
 export async function listNearbyUserHubs(
@@ -296,6 +316,51 @@ export async function createSeededHub(input: {
   return toSeededItem(data as HubRow);
 }
 
+export type BulkSeedCityInput = {
+  title: string;
+  centerLat: number;
+  centerLng: number;
+  locationHint?: string | null;
+};
+
+export type BulkSeedResult = {
+  created: SeededHubListItem[];
+  errors: Array<{ title: string; error: string }>;
+};
+
+/** Plants many city hubs at once, all at the same radius. Each city is created
+ * independently — a name clash or bad coordinate on one city doesn't stop the
+ * rest of the batch. */
+export async function bulkCreateSeededHubs(
+  cities: BulkSeedCityInput[],
+  radiusMiles: number,
+): Promise<BulkSeedResult> {
+  const created: SeededHubListItem[] = [];
+  const errors: Array<{ title: string; error: string }> = [];
+
+  for (const city of cities) {
+    try {
+      const radius = clampSeededRadius(radiusMiles);
+      const kind = placeKindForRadius(radius);
+      const hub = await createSeededHub({
+        title: city.title,
+        centerLat: city.centerLat,
+        centerLng: city.centerLng,
+        radiusMiles: radius,
+        locationHint: city.locationHint ?? null,
+        placeKind: kind,
+        description: null,
+      });
+      created.push(hub);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? mapSeededHubRpcError(error.message) : "Failed to plant hub";
+      errors.push({ title: city.title, error: message });
+    }
+  }
+
+  return { created, errors };
+}
+
 async function groupCountForHub(id: string): Promise<number> {
   const { data, error } = await supabaseAdmin
     .from("discussion_groups")
@@ -308,6 +373,8 @@ async function groupCountForHub(id: string): Promise<number> {
 export async function updateSeededHubCoverage(
   id: string,
   input: {
+    title?: string;
+    description?: string | null;
     centerLat?: number;
     centerLng?: number;
     radiusMiles?: number;
@@ -342,6 +409,10 @@ export async function updateSeededHubCoverage(
     patch.place_kind = input.placeKind;
   }
   if (input.locationHint !== undefined) patch.location_hint = input.locationHint?.trim() || null;
+  if (input.description !== undefined) patch.description = input.description?.trim() || null;
+  if (input.title !== undefined && input.title.trim() && !hubNamesCollide(input.title, String(existing.title))) {
+    patch.title = await prepareUniqueHubName(input.title, id);
+  }
 
   const { data, error } = await supabaseAdmin
     .from("area_discussions")

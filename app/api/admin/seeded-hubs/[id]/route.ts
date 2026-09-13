@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
-import { deleteSeededHub, updateSeededHubCoverage } from "@/lib/seeded-hubs/db";
+import { deleteSeededHub, getSeededHubById, updateSeededHubCoverage } from "@/lib/seeded-hubs/db";
 import {
   clampSeededRadius,
   isValidSeededCoordinate,
@@ -13,10 +13,26 @@ type Ctx = { params: Promise<{ id: string }> };
 
 const PLACE_KINDS = new Set<SeededPlaceKind>(["city", "neighborhood"]);
 
+export async function GET(_req: NextRequest, { params }: Ctx) {
+  await requireAdmin(OPERATOR_ROLES);
+  const { id } = await params;
+
+  try {
+    const hub = await getSeededHubById(id);
+    if (!hub) return NextResponse.json({ error: "Hub not found" }, { status: 404 });
+    return NextResponse.json({ hub });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to load hub";
+    return NextResponse.json({ error: mapSeededHubRpcError(message) }, { status: 500 });
+  }
+}
+
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const admin = await requireAdmin(OPERATOR_ROLES);
   const { id } = await params;
   let body: {
+    title?: string;
+    description?: string | null;
     center_lat?: number;
     center_lng?: number;
     radius_miles?: number;
@@ -45,6 +61,8 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
   try {
     const hub = await updateSeededHubCoverage(id, {
+      title: body.title,
+      description: body.description,
       centerLat: lat,
       centerLng: lng,
       radiusMiles: radius ?? undefined,
@@ -53,8 +71,8 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     });
     await logAdminAction({
       category: "admin",
-      action: "update_seeded_hub_coverage",
-      detail: `Updated coverage for ${hub.title} (${hub.place_kind ?? "city"}, ${hub.radius_miles} mi)`,
+      action: "update_seeded_hub",
+      detail: `Updated ${hub.title} (${hub.place_kind ?? "city"}, ${hub.radius_miles} mi)`,
       targetType: "area_discussion",
       targetId: id,
       actorId: admin.id,

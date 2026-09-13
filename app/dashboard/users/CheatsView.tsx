@@ -32,8 +32,9 @@ const AVATAR_COLORS = [
   "bg-rose-500/15 text-rose-300",
 ];
 
-function avatarColor(id: string) {
-  return AVATAR_COLORS[id.charCodeAt(id.length - 1) % AVATAR_COLORS.length];
+function avatarColor(id: string | null | undefined) {
+  const safeId = id || "?";
+  return AVATAR_COLORS[safeId.charCodeAt(safeId.length - 1) % AVATAR_COLORS.length];
 }
 
 // ---------------------------------------------------------------------------

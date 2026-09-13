@@ -29,11 +29,17 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   try {
     switch (tab) {
       case "feed": {
-        const { data, error } = await supabaseAdmin.rpc("get_area_discussion_top_level_comments", {
-          p_discussion_id: id,
-          p_limit: limit,
-          p_offset: offset,
-        });
+        // The mobile-facing RPC requires auth.uid() (a real user session), which
+        // the service-role admin client never has. Query the table directly
+        // instead — service_role already bypasses RLS, so no bypass RPC is needed.
+        const { data, error } = await supabaseAdmin
+          .from("area_discussion_comments")
+          .select("id,body,image_url,gif_preview_url,created_at,is_hidden,is_pinned")
+          .eq("discussion_id", id)
+          .is("parent_id", null)
+          .order("is_pinned", { ascending: false })
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
         if (error) throw new Error(error.message);
         return NextResponse.json({ tab, items: data ?? [], offset, limit });
       }
@@ -68,11 +74,13 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         return NextResponse.json({ tab, items: data ?? [], offset, limit });
       }
       case "wiki": {
-        const { data, error } = await supabaseAdmin.rpc("get_discussion_wiki_sections", {
-          p_discussion_id: id,
-          p_limit: limit,
-          p_offset: offset,
-        });
+        // Same auth.uid() issue as "feed" — read the table directly.
+        const { data, error } = await supabaseAdmin
+          .from("discussion_wiki_sections")
+          .select("*")
+          .eq("discussion_id", id)
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
         if (error) throw new Error(error.message);
         return NextResponse.json({ tab, items: data ?? [], offset, limit });
       }
@@ -111,16 +119,15 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         });
       }
       case "polls": {
-        const { data, error } = await supabaseAdmin.rpc("get_discussion_poll_history", {
-          p_discussion_id: id,
-          p_limit: limit,
-          p_offset: offset,
-          p_search: null,
-        });
+        // Same auth.uid() issue as "feed" — read the table directly.
+        const { data, error } = await supabaseAdmin
+          .from("discussion_polls")
+          .select("*")
+          .eq("discussion_id", id)
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
         if (error) throw new Error(error.message);
-        const payload = data as { items?: unknown[] } | unknown[] | null;
-        const items = Array.isArray(payload) ? payload : (payload?.items ?? []);
-        return NextResponse.json({ tab, items, offset, limit });
+        return NextResponse.json({ tab, items: data ?? [], offset, limit });
       }
       default:
         return NextResponse.json({ error: "Unknown tab" }, { status: 400 });

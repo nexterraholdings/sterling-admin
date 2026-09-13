@@ -63,6 +63,13 @@ export type AdminGroupContentItem = {
   replies: AdminGroupContentItem[];
 };
 
+export type AdminGroupMember = {
+  user_id: string;
+  role: string;
+  is_prop_account: boolean;
+  profile: ProfileStub | null;
+};
+
 export type MoveGroupError = {
   group_id: string;
   error: string;

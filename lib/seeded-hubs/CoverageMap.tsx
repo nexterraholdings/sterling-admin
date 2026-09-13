@@ -85,6 +85,7 @@ export function CoverageMap({
   const hasCenter = lat != null && lng != null && isFiniteCoord(lat, lng);
   const hasCenterRef = useRef(hasCenter);
   hasCenterRef.current = hasCenter;
+  const hasFitAllBoundsRef = useRef(false);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -112,7 +113,9 @@ export function CoverageMap({
 
       mapRef.current = map;
       setReady(true);
-      requestAnimationFrame(() => map.invalidateSize());
+      requestAnimationFrame(() => {
+        if (mapRef.current === map) map.invalidateSize();
+      });
     });
 
     return () => {
@@ -199,12 +202,16 @@ export function CoverageMap({
         layers.addLayer(marker);
       }
 
-      if (!hasCenterRef.current && others.length > 0) {
+      // Only auto-fit to every hub once, on first load — refitting every time
+      // the hub list changes (e.g. after planting a new one) would yank the
+      // admin's current pan/zoom back out to a world view.
+      if (!hasCenterRef.current && others.length > 0 && !hasFitAllBoundsRef.current) {
         current.fitBounds(L.featureGroup(layers.getLayers()).getBounds(), {
           padding: [36, 36],
           maxZoom: 11,
           animate: false,
         });
+        hasFitAllBoundsRef.current = true;
       }
     });
   }, [ready, hubs, selectedHubId]);

@@ -80,8 +80,9 @@ const AVATAR_PALETTES = [
   "bg-rose-500/15 text-rose-300",
 ];
 
-function avatarColor(id: string): string {
-  const n = id.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+function avatarColor(id: string | null | undefined): string {
+  const safeId = id || "?";
+  const n = safeId.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   return AVATAR_PALETTES[n % AVATAR_PALETTES.length];
 }
 

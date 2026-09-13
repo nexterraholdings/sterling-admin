@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
-import { updateSystemGroup } from "@/lib/groups/db";
+import { getAdminGroupById, updateSystemGroup } from "@/lib/groups/db";
 import { mapSeededHubRpcError } from "@/lib/seeded-hubs/types";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+export async function GET(_req: NextRequest, { params }: Ctx) {
+  await requireAdmin(OPERATOR_ROLES);
+  const { id } = await params;
+
+  try {
+    const group = await getAdminGroupById(id);
+    return NextResponse.json({ group });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to load group";
+    return NextResponse.json({ error: mapSeededHubRpcError(message) }, { status: 404 });
+  }
+}
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const admin = await requireAdmin(OPERATOR_ROLES);

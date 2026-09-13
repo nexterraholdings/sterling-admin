@@ -46,12 +46,21 @@ const AVATAR_PALETTES = [
   "bg-rose-500/15 text-rose-300",
 ];
 
-function avatarColor(id: string): string {
-  const n = id.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+function avatarColor(id: string | null | undefined): string {
+  const safeId = id || "?";
+  const n = safeId.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   return AVATAR_PALETTES[n % AVATAR_PALETTES.length];
 }
 
-export function Avatar({ id, person, size = "md" }: { id: string; person: PersonLike; size?: "sm" | "md" }) {
+export function Avatar({
+  id,
+  person,
+  size = "md",
+}: {
+  id: string | null | undefined;
+  person: PersonLike;
+  size?: "sm" | "md";
+}) {
   const dims = size === "sm" ? "h-8 w-8 text-[10px]" : "h-10 w-10 text-xs";
   return (
     <div className={`flex shrink-0 items-center justify-center rounded-full font-bold ${dims} ${avatarColor(id)}`}>

@@ -10,7 +10,7 @@ export default function SeedingContentLayout({ children }: { children: React.Rea
             <div>
               <CardTitle className="text-xl font-semibold text-zinc-50">Seeding content</CardTitle>
               <p className="mt-2 text-sm leading-6 text-zinc-400">
-                Browse seeded hubs and groups, then publish content into a group from a prop account.
+                Browse seeded hubs and groups, join existing or new prop accounts in bulk, then publish posts and photos.
               </p>
             </div>
             <Badge variant="outline" className="border-blue-500/40 text-blue-300">

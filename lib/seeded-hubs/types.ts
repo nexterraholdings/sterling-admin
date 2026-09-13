@@ -132,6 +132,9 @@ export function mapSeededHubRpcError(message: string): string {
   if (lower.includes("seeded_hub_required")) return "Pick a seeded city hub as the destination.";
   if (lower.includes("user_hub_required")) return "Only user-created hubs can be turned into groups.";
   if (lower.includes("hub_already_migrated")) return "That hub was already converted.";
+  if (lower.includes("discussion_opinion_image_url_invalid")) {
+    return "That photo could not be attached. Use a JPEG, PNG, or WebP under 5 MB.";
+  }
   if (lower.includes("group_image_url_invalid")) return "That hub photo could not be copied onto the group.";
   if (lower.includes("hub_has_no_owner")) return "That hub has no steward to become the group owner.";
   if (lower.includes("discussion_not_found")) return "Hub not found.";

@@ -633,7 +633,7 @@ export async function listProAccounts(): Promise<ProAccountStub[]> {
     .select("id,username,full_name,email,avatar_url,bio,created_at")
     .ilike("email", "%@sterlingtest.local")
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(500);
 
   if (error) throw new Error(error.message);
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ImagePlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/app/dashboard/discussions/discussionUi";
 import { generateProAccount, listProAccounts, updateProAccount, type ProAccountStub } from "../actions";
@@ -10,9 +11,8 @@ import { ContentPost, inputCls, normalizeContentItem, readApiJson } from "./shar
 /**
  * Prop-account posting + content feed for a single group. Shared between the
  * hub-first seeding flow (/dashboard/users/seeding-content/[hubId]/[groupId])
- * and the groups-first flow (/dashboard/groups/[groupId]) — the only
- * difference between those two is what's rendered above this component
- * (breadcrumb vs. group header + members).
+ * and the groups-first flow (/dashboard/groups/[groupId]). Member seeding sits
+ * above this component in both places.
  */
 export function GroupContentWorkspace({ groupId }: { groupId: string }) {
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +24,8 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [postBody, setPostBody] = useState("");
+  const [postImageFile, setPostImageFile] = useState<File | null>(null);
+  const [postImagePreview, setPostImagePreview] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
 
   const [showAccountForm, setShowAccountForm] = useState(false);
@@ -63,6 +65,12 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
     loadContent();
     loadProAccounts();
   }, [loadContent, loadProAccounts]);
+
+  useEffect(() => {
+    return () => {
+      if (postImagePreview?.startsWith("blob:")) URL.revokeObjectURL(postImagePreview);
+    };
+  }, [postImagePreview]);
 
   function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
@@ -147,29 +155,60 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
     }
   }
 
+  function handlePostImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = "";
+    setPostImageFile(file);
+    setPostImagePreview((prev) => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  }
+
+  function clearPostImage() {
+    setPostImageFile(null);
+    setPostImagePreview((prev) => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }
+
   async function handlePublish() {
     if (!selectedAccountId) {
       setError("Choose (or create) a prop account to post as.");
       return;
     }
     const body = postBody.trim();
-    if (!body) {
-      setError("Write a post body first.");
+    if (!body && !postImageFile) {
+      setError("Write a post or attach a photo.");
       return;
     }
 
     setPosting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/content`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId: selectedAccountId, body }),
-      });
+      let res: Response;
+      if (postImageFile) {
+        const formData = new FormData();
+        formData.set("accountId", selectedAccountId);
+        formData.set("body", body);
+        formData.set("image", postImageFile);
+        res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/content`, {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/content`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accountId: selectedAccountId, body }),
+        });
+      }
       const payload = await readApiJson<{ item?: AdminGroupContentItem; error?: string }>(res);
       if (!res.ok || !payload.item) throw new Error(payload.error ?? "Failed to publish content");
       setContent((prev) => [normalizeContentItem(payload.item as AdminGroupContentItem), ...prev]);
       setPostBody("");
+      clearPostImage();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to publish content");
     } finally {
@@ -370,7 +409,7 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
             <textarea
               value={postBody}
               onChange={(e) => setPostBody(e.target.value)}
-              placeholder="Write a group post..."
+              placeholder="Write a group post, or attach a photo..."
               className={`${inputCls} min-h-[42px] flex-1 resize-y`}
             />
             <Button
@@ -381,6 +420,34 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
               {posting ? "Publishing..." : "Publish"}
             </Button>
           </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-blue-300 hover:text-blue-200">
+              <ImagePlus className="h-3.5 w-3.5" />
+              {postImageFile ? "Change photo" : "Attach photo"}
+              <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handlePostImageChange} />
+            </label>
+            {postImageFile && (
+              <span className="truncate text-[11px] text-zinc-500">{postImageFile.name}</span>
+            )}
+          </div>
+          {postImagePreview && (
+            <div className="relative w-fit">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={postImagePreview}
+                alt="Attachment preview"
+                className="max-h-48 rounded-xl border border-zinc-800 object-cover"
+              />
+              <button
+                type="button"
+                onClick={clearPostImage}
+                className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-zinc-950/80 text-zinc-200 hover:bg-zinc-900"
+                aria-label="Remove photo"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

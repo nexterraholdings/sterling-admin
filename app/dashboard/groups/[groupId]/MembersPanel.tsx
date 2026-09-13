@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, personLabel } from "@/app/dashboard/discussions/discussionUi";
 import { generateProAccount, listProAccounts, type ProAccountStub } from "@/app/dashboard/users/actions";
 import { readApiJson } from "@/app/dashboard/users/seeding-content/shared";
+import { SYSTEM_GROUP_OWNER_EMAIL } from "@/lib/prop-accounts";
 import type { AdminGroupMember } from "@/lib/groups/types";
 
 function PropPill() {
@@ -33,12 +34,18 @@ function randomFakeName(): string {
   return `${first} ${last}`;
 }
 
+function accountLabel(account: ProAccountStub): string {
+  const handle = account.username ? `@${account.username}` : account.id.slice(0, 8);
+  return account.fullName ? `${handle} — ${account.fullName}` : handle;
+}
+
 export function MembersPanel({ groupId }: { groupId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [members, setMembers] = useState<AdminGroupMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(true);
   const [proAccounts, setProAccounts] = useState<ProAccountStub[]>([]);
-  const [selectedNewMemberId, setSelectedNewMemberId] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [fakeCount, setFakeCount] = useState(5);
@@ -75,31 +82,58 @@ export function MembersPanel({ groupId }: { groupId: string }) {
 
   const availableToAdd = useMemo(() => {
     const memberIds = new Set(members.map((m) => m.user_id));
-    return proAccounts.filter((a) => !memberIds.has(a.id));
+    return proAccounts.filter(
+      (a) => !memberIds.has(a.id) && a.email?.toLowerCase() !== SYSTEM_GROUP_OWNER_EMAIL,
+    );
   }, [proAccounts, members]);
 
-  useEffect(() => {
-    if (selectedNewMemberId && !availableToAdd.some((a) => a.id === selectedNewMemberId)) {
-      setSelectedNewMemberId("");
-    }
-  }, [availableToAdd, selectedNewMemberId]);
+  const filteredAvailable = useMemo(() => {
+    const term = memberSearch.trim().toLowerCase();
+    if (!term) return availableToAdd;
+    return availableToAdd.filter((account) => {
+      const haystack = `${account.username ?? ""} ${account.fullName ?? ""} ${account.email ?? ""}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [availableToAdd, memberSearch]);
 
-  async function handleAddMember() {
-    if (!selectedNewMemberId) return;
+  useEffect(() => {
+    const allowed = new Set(availableToAdd.map((a) => a.id));
+    setSelectedIds((prev) => prev.filter((id) => allowed.has(id)));
+  }, [availableToAdd]);
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]));
+  }
+
+  function toggleSelectVisible() {
+    const visibleIds = filteredAvailable.map((a) => a.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+    if (allSelected) {
+      const hide = new Set(visibleIds);
+      setSelectedIds((prev) => prev.filter((id) => !hide.has(id)));
+      return;
+    }
+    setSelectedIds((prev) => [...new Set([...prev, ...visibleIds])]);
+  }
+
+  async function handleAddSelected() {
+    if (selectedIds.length === 0) return;
     setAdding(true);
     setError(null);
     try {
       const res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: selectedNewMemberId }),
+        body: JSON.stringify({ userIds: selectedIds }),
       });
-      const payload = await readApiJson<{ ok?: boolean; error?: string }>(res);
-      if (!res.ok) throw new Error(payload.error ?? "Failed to add member");
-      setSelectedNewMemberId("");
+      const payload = await readApiJson<{ ok?: boolean; added?: number; error?: string }>(res);
+      if (!res.ok) throw new Error(payload.error ?? "Failed to add members");
+      const added = payload.added ?? selectedIds.length;
+      setSelectedIds([]);
       await loadMembers();
+      toast.success(`Added ${added} prop account${added === 1 ? "" : "s"}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add member");
+      setError(e instanceof Error ? e.message : "Failed to add members");
     } finally {
       setAdding(false);
     }
@@ -136,7 +170,7 @@ export function MembersPanel({ groupId }: { groupId: string }) {
     await Promise.all([loadMembers(), loadProAccounts()]);
     setSeeding(false);
     setSeedProgress(null);
-    if (added) toast.success(`Added ${added} fake member${added === 1 ? "" : "s"}`);
+    if (added) toast.success(`Generated and added ${added} prop account${added === 1 ? "" : "s"}`);
     if (failures.length) toast.error(`${failures.length} failed: ${failures[0]}`);
   }
 
@@ -146,7 +180,7 @@ export function MembersPanel({ groupId }: { groupId: string }) {
     try {
       const res = await fetch(
         `/api/admin/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
-        { method: "DELETE" }
+        { method: "DELETE" },
       );
       const payload = await readApiJson<{ ok?: boolean; error?: string }>(res);
       if (!res.ok) throw new Error(payload.error ?? "Failed to remove member");
@@ -157,6 +191,9 @@ export function MembersPanel({ groupId }: { groupId: string }) {
       setRemovingId(null);
     }
   }
+
+  const allVisibleSelected =
+    filteredAvailable.length > 0 && filteredAvailable.every((account) => selectedIds.includes(account.id));
 
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
@@ -178,8 +215,84 @@ export function MembersPanel({ groupId }: { groupId: string }) {
       )}
 
       <div className="mb-3 rounded-xl border border-dashed border-zinc-700 bg-zinc-950/60 p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-zinc-400">Seed</span>
+        <div className="text-xs font-semibold text-zinc-200">Add existing prop accounts</div>
+        <p className="mt-1 text-[11px] text-zinc-500">
+          Pick accounts already in the pool and join them to this group in one pass.
+        </p>
+        <input
+          value={memberSearch}
+          onChange={(e) => setMemberSearch(e.target.value)}
+          placeholder="Search username or name"
+          className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-600 focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/15"
+        />
+        {availableToAdd.length === 0 ? (
+          <p className="mt-2 text-[11px] text-zinc-500">Every existing prop account is already in this group.</p>
+        ) : (
+          <>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={toggleSelectVisible}
+                className="text-[11px] font-semibold text-blue-300 hover:text-blue-200"
+              >
+                {allVisibleSelected ? "Clear visible" : "Select visible"}
+              </button>
+              <span className="text-[11px] text-zinc-500">
+                {selectedIds.length} selected · {filteredAvailable.length} shown
+              </span>
+            </div>
+            <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-1.5">
+              {filteredAvailable.length === 0 ? (
+                <div className="px-2 py-3 text-center text-[11px] text-zinc-500">No matches.</div>
+              ) : (
+                filteredAvailable.map((account) => {
+                  const checked = selectedIds.includes(account.id);
+                  return (
+                    <label
+                      key={account.id}
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 ${
+                        checked ? "bg-blue-500/10" : "hover:bg-zinc-900"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSelected(account.id)}
+                        className="accent-blue-500"
+                      />
+                      {account.avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={account.avatarUrl} alt="" className="h-6 w-6 rounded-full object-cover" />
+                      ) : (
+                        <Avatar
+                          id={account.id}
+                          person={{ full_name: account.fullName, username: account.username }}
+                          size="sm"
+                        />
+                      )}
+                      <span className="min-w-0 truncate text-xs text-zinc-200">{accountLabel(account)}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            <Button
+              size="sm"
+              className="mt-2 bg-blue-500 text-zinc-950 hover:bg-blue-400"
+              onClick={() => void handleAddSelected()}
+              disabled={adding || selectedIds.length === 0}
+            >
+              {adding
+                ? "Adding..."
+                : `Add selected${selectedIds.length ? ` (${selectedIds.length})` : ""}`}
+            </Button>
+          </>
+        )}
+      </div>
+
+      <div className="mb-3 rounded-xl border border-dashed border-zinc-700 bg-zinc-950/60 p-3">
+        <div className="text-xs font-semibold text-zinc-200">Generate new prop accounts</div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
             type="number"
             min={1}
@@ -189,14 +302,15 @@ export function MembersPanel({ groupId }: { groupId: string }) {
             disabled={seeding}
             className="w-16 rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-50 outline-none transition focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/15 disabled:opacity-50"
           />
-          <span className="text-xs font-medium text-zinc-400">fake members</span>
+          <span className="text-xs font-medium text-zinc-400">new accounts</span>
           <Button
             size="sm"
-            className="bg-blue-500 text-zinc-950 hover:bg-blue-400"
+            variant="secondary"
+            className="border-zinc-700 text-zinc-100"
             onClick={() => void handleSeedFakeMembers()}
             disabled={seeding}
           >
-            {seeding ? "Seeding..." : "Generate & add"}
+            {seeding ? "Generating..." : "Generate & add"}
           </Button>
           {seedProgress && (
             <span className="text-[11px] text-zinc-500">
@@ -207,33 +321,6 @@ export function MembersPanel({ groupId }: { groupId: string }) {
         <p className="mt-1.5 text-[11px] text-zinc-500">
           Creates brand-new prop accounts with random names and joins them to this group.
         </p>
-      </div>
-
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <select
-          value={selectedNewMemberId}
-          onChange={(e) => setSelectedNewMemberId(e.target.value)}
-          className="w-full max-w-xs rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/15"
-        >
-          <option value="">
-            {availableToAdd.length === 0 ? "No existing prop accounts available" : "Or add an existing prop account..."}
-          </option>
-          {availableToAdd.map((account) => (
-            <option key={account.id} value={account.id}>
-              @{account.username ?? account.id.slice(0, 8)}
-              {account.fullName ? ` — ${account.fullName}` : ""}
-            </option>
-          ))}
-        </select>
-        <Button
-          size="sm"
-          variant="secondary"
-          className="border-zinc-700 text-zinc-100"
-          onClick={handleAddMember}
-          disabled={adding || !selectedNewMemberId}
-        >
-          {adding ? "Adding..." : "Add"}
-        </Button>
       </div>
 
       {membersLoading ? (

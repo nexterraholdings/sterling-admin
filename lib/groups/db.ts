@@ -13,7 +13,7 @@ import {
   type MoveGroupsResponse,
   type MovedGroupResult,
 } from "@/lib/groups/types";
-import { isPropAccountEmail } from "@/lib/prop-accounts";
+import { isPropAccountEmail, SYSTEM_GROUP_OWNER_EMAIL } from "@/lib/prop-accounts";
 
 const GROUP_SELECT =
   "id,discussion_id,creator_id,title,description,category,categories,avatar_url,visibility,archived_at,created_at,updated_at";
@@ -23,7 +23,6 @@ const GROUP_CORE_SELECT =
 // A single, well-known "Sterling" profile that owns groups the admin dashboard
 // creates directly (no real user). Created lazily on first use so environments
 // that never touch this feature never get an extra profile row.
-const SYSTEM_GROUP_OWNER_EMAIL = "sterling-groups@sterlingtest.local";
 const SYSTEM_GROUP_OWNER_USERNAME = "sterling_official";
 
 async function findSystemGroupOwnerId(): Promise<string | null> {
@@ -90,6 +89,57 @@ async function uploadGroupAvatar(
   // with no query string, so drop the cache-busting suffix Supabase adds.
   const publicUrl = String(pub?.publicUrl ?? "").split("?")[0];
   if (!publicUrl) throw new Error("Could not resolve the uploaded group photo URL");
+  return publicUrl;
+}
+
+const DISCUSSION_OPINION_IMAGE_BUCKET = "discussion-opinion-images";
+const DISCUSSION_OPINION_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+export type GroupContentImageInput = {
+  buffer: Buffer;
+  contentType: string | null;
+};
+
+function normalizeOpinionImageContentType(
+  buffer: Buffer,
+  contentType: string | null,
+): "image/jpeg" | "image/png" | "image/webp" {
+  const mime = (contentType || "").toLowerCase().split(";")[0].trim();
+  if (mime === "image/jpg" || mime === "image/jpeg") return "image/jpeg";
+  if (mime === "image/png") return "image/png";
+  if (mime === "image/webp") return "image/webp";
+  if (buffer.length >= 12) {
+    if (buffer[0] === 0xff && buffer[1] === 0xd8) return "image/jpeg";
+    if (buffer[0] === 0x89 && buffer[1] === 0x50) return "image/png";
+    if (buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") {
+      return "image/webp";
+    }
+  }
+  throw new Error("That photo type is not supported. Use JPEG, PNG, or WebP.");
+}
+
+async function uploadDiscussionOpinionImage(
+  authorId: string,
+  discussionId: string,
+  image: GroupContentImageInput,
+): Promise<string> {
+  if (image.buffer.byteLength > DISCUSSION_OPINION_IMAGE_MAX_BYTES) {
+    throw new Error("Photo must be 5 MB or smaller.");
+  }
+  const contentType = normalizeOpinionImageContentType(image.buffer, image.contentType);
+  const ext = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+  const storagePath = `${authorId}/${discussionId}/${Date.now()}.${ext}`;
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from(DISCUSSION_OPINION_IMAGE_BUCKET)
+    .upload(storagePath, image.buffer, {
+      contentType,
+      upsert: false,
+      cacheControl: "3600",
+    });
+  if (uploadError) throw new Error(`Could not upload photo: ${uploadError.message}`);
+  const { data: pub } = supabaseAdmin.storage.from(DISCUSSION_OPINION_IMAGE_BUCKET).getPublicUrl(storagePath);
+  const publicUrl = String(pub?.publicUrl ?? "").split("?")[0];
+  if (!publicUrl) throw new Error("Could not resolve the uploaded photo URL");
   return publicUrl;
 }
 
@@ -627,9 +677,10 @@ export async function publishGroupContent(input: {
   accountId: string;
   body: string;
   parentId?: string | null;
+  image?: GroupContentImageInput | null;
 }): Promise<AdminGroupContentItem> {
   const safeBody = input.body.trim();
-  if (!safeBody) throw new Error("Post body is required");
+  if (!safeBody && !input.image) throw new Error("Write a post or attach a photo.");
 
   const { data: group, error: groupError } = await supabaseAdmin
     .from("discussion_groups")
@@ -638,6 +689,11 @@ export async function publishGroupContent(input: {
     .maybeSingle();
   if (groupError) throwDbError(groupError, "Failed to load group");
   if (!group) throw new Error("group_not_found");
+
+  let imageUrl: string | null = null;
+  if (input.image) {
+    imageUrl = await uploadDiscussionOpinionImage(input.accountId, String(group.discussion_id), input.image);
+  }
 
   // area_discussion_comments has a trigger that rejects any insert that
   // doesn't go through the app's create_area_discussion_comment() RPC (which
@@ -655,6 +711,14 @@ export async function publishGroupContent(input: {
     .single();
   if (error) throwDbError(error, "Failed to publish group content");
 
+  if (imageUrl) {
+    const { error: imageError } = await supabaseAdmin
+      .from("area_discussion_comments")
+      .update({ image_url: imageUrl, image_thumb_url: imageUrl })
+      .eq("id", data.out_id);
+    if (imageError) throwDbError(imageError, "Post created, but the photo could not be attached");
+  }
+
   const authors = await loadCreators([input.accountId]);
   const row: ContentRow = {
     id: data.out_id,
@@ -663,6 +727,7 @@ export async function publishGroupContent(input: {
     body: data.out_body,
     likes_count: data.out_likes_count,
     created_at: data.out_created_at,
+    image_url: imageUrl,
   };
   return toContentItem(row, authors.get(input.accountId) ?? null);
 }
@@ -703,7 +768,15 @@ export async function listGroupMembers(groupId: string): Promise<AdminGroupMembe
   });
 }
 
-export async function addGroupMember(groupId: string, userId: string, role = "member"): Promise<void> {
+export async function addGroupMembers(
+  groupId: string,
+  userIds: string[],
+  role = "member",
+): Promise<{ added: number }> {
+  const unique = [...new Set(userIds.map((id) => id.trim()).filter(Boolean))];
+  if (unique.length === 0) throw new Error("Choose at least one prop account to add");
+  if (unique.length > 100) throw new Error("Add at most 100 accounts at a time");
+
   const { data: group, error: groupError } = await supabaseAdmin
     .from("discussion_groups")
     .select("id,discussion_id")
@@ -712,25 +785,30 @@ export async function addGroupMember(groupId: string, userId: string, role = "me
   if (groupError) throwDbError(groupError, "Failed to load group");
   if (!group) throw new Error("group_not_found");
 
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .select("id")
-    .eq("id", userId)
-    .maybeSingle();
-  if (profileError) throwDbError(profileError, "Failed to verify account");
-  if (!profile) throw new Error("account_not_found");
+  const { data: profiles, error: profileError } = await supabaseAdmin.from("profiles").select("id").in("id", unique);
+  if (profileError) throwDbError(profileError, "Failed to verify accounts");
+  const found: string[] = (profiles ?? []).map((row: { id: string }) => String(row.id));
+  if (found.length === 0) throw new Error("account_not_found");
 
-  const { error } = await supabaseAdmin
-    .from("discussion_group_members")
-    .upsert({ group_id: groupId, user_id: userId, role }, { onConflict: "group_id,user_id" });
-  if (error) throwDbError(error, "Failed to add member");
+  const { error } = await supabaseAdmin.from("discussion_group_members").upsert(
+    found.map((userId) => ({ group_id: groupId, user_id: userId, role })),
+    { onConflict: "group_id,user_id" },
+  );
+  if (error) throwDbError(error, "Failed to add members");
 
-  const { error: participantError } = await supabaseAdmin
-    .from("area_discussion_participants")
-    .upsert({ discussion_id: group.discussion_id, user_id: userId }, { onConflict: "discussion_id,user_id" });
+  const { error: participantError } = await supabaseAdmin.from("area_discussion_participants").upsert(
+    found.map((userId) => ({ discussion_id: group.discussion_id, user_id: userId })),
+    { onConflict: "discussion_id,user_id" },
+  );
   if (participantError && !isMissingSchemaError(participantError)) {
-    console.error("[groups] failed to join member to hub participants:", participantError.message);
+    console.error("[groups] failed to join members to hub participants:", participantError.message);
   }
+
+  return { added: found.length };
+}
+
+export async function addGroupMember(groupId: string, userId: string, role = "member"): Promise<void> {
+  await addGroupMembers(groupId, [userId], role);
 }
 
 export async function removeGroupMember(groupId: string, userId: string): Promise<void> {

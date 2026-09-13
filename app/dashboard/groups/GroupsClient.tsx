@@ -305,7 +305,7 @@ export function GroupsClient() {
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400">Content</p>
             <h1 className="mt-1 text-lg font-semibold text-zinc-50">Groups</h1>
             <p className="mt-0.5 max-w-2xl text-xs text-zinc-500">
-              Browse groups, then open one to seed it with prop accounts — add prop members and publish content.
+              Browse groups, then open one to attach photos, add existing prop accounts in bulk, or generate new ones.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">

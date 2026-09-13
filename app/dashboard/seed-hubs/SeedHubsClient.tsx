@@ -531,6 +531,7 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
 
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
   const [livePreview, setLivePreview] = useState<{ lat: number; lng: number; radius: number } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ lat: number; lng: number } | null>(null);
   const selectedHub = hubs.find((h) => h.id === selectedHubId) ?? null;
 
   useEffect(() => {
@@ -568,6 +569,7 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
   function startPlantAt(lat: number, lng: number) {
     setSelectedHubId(null);
     setLivePreview(null);
+    setMoveTarget(null);
     setPendingCenter({ lat, lng });
     setTitle("");
     setHint("");
@@ -580,6 +582,7 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
 
   function selectHubOnMap(id: string) {
     setPendingCenter(null);
+    setMoveTarget(null);
     setSelectedHubId(id);
     const hub = hubs.find((h) => h.id === id);
     if (hub) setLivePreview({ lat: hub.center_lat, lng: hub.center_lng, radius: hub.radius_miles });
@@ -588,6 +591,18 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
   function closeEdit() {
     setSelectedHubId(null);
     setLivePreview(null);
+    setMoveTarget(null);
+  }
+
+  // While a hub is selected for editing, clicking elsewhere on the map moves
+  // that hub there instead of starting a new plant.
+  function handleMapClick(lat: number, lng: number) {
+    if (selectedHubId) {
+      setLivePreview((prev) => (prev ? { ...prev, lat, lng } : { lat, lng, radius: 30 }));
+      setMoveTarget({ lat, lng });
+    } else {
+      startPlantAt(lat, lng);
+    }
   }
 
   function handleHubSaved(updated: SeededHubListItem) {
@@ -663,7 +678,7 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
           hubs={hubs}
           selectedHubId={selectedHubId}
           onSelectHub={selectHubOnMap}
-          onCenterChange={(lat, lng) => startPlantAt(lat, lng)}
+          onCenterChange={handleMapClick}
         />
       </div>
 
@@ -686,6 +701,7 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
                 Open in Manage hubs ↗
               </button>
             </div>
+            <p className="-mt-2 text-[11px] text-zinc-500">Click elsewhere on the map to move this hub.</p>
             <HubEditForm
               key={selectedHub.id}
               hub={selectedHub}
@@ -693,6 +709,7 @@ function MapTab({ onOpenInManageTab }: { onOpenInManageTab: (id: string) => void
               onDeleted={handleHubDeleted}
               onLiveChange={setLivePreview}
               onClose={closeEdit}
+              moveTo={moveTarget}
             />
           </>
         ) : !pendingCenter ? (
@@ -761,12 +778,18 @@ function HubEditForm({
   onDeleted,
   onLiveChange,
   onClose,
+  moveTo,
 }: {
   hub: SeededHubListItem;
   onSaved: (hub: SeededHubListItem) => void;
   onDeleted: (hubId: string) => void;
   onLiveChange?: (fields: { lat: number; lng: number; radius: number }) => void;
   onClose?: () => void;
+  /** Set (to a fresh object) when the map is clicked elsewhere while this hub
+   * is being edited, so the click moves the hub instead of starting a new
+   * plant. A new object reference every time is what makes the effect below
+   * re-fire even if someone clicks the same spot twice in a row. */
+  moveTo?: { lat: number; lng: number } | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [seededVisible, setSeededVisible] = useState(hub.seeded_visible);
@@ -776,6 +799,12 @@ function HubEditForm({
   const [lat, setLat] = useState(String(hub.center_lat));
   const [lng, setLng] = useState(String(hub.center_lng));
   const [radius, setRadius] = useState(clampSeededRadius(hub.radius_miles));
+
+  useEffect(() => {
+    if (!moveTo) return;
+    setLat(String(moveTo.lat));
+    setLng(String(moveTo.lng));
+  }, [moveTo]);
 
   const onLiveChangeRef = useRef(onLiveChange);
   onLiveChangeRef.current = onLiveChange;

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { isPropAccountEmail } from "@/lib/prop-accounts";
 import { requireAdmin, ANALYST_ROLES } from "./dal";
 
 export type RoleDistribution = { name: string; count: number; percentage: number; color: string };
@@ -11,6 +12,14 @@ export type TrendingHub = {
   recent_comment_count: number;
   total_comment_count: number;
   participant_count: number;
+};
+export type PropAccountsSummary = {
+  total: number;
+  newThisWeek: number;
+  activeThisWeek: number;
+  totalPosts: number;
+  postsThisWeek: number;
+  commentsThisWeek: number;
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -88,7 +97,7 @@ export async function fetchAnalytics() {
     // All profiles for role distribution
     supabaseAdmin
       .from("profiles")
-      .select("account_role,role,operating_markets,moderation_strike_count"),
+      .select("id,email,account_role,role,operating_markets,moderation_strike_count"),
 
     // All reports for category breakdown
     supabaseAdmin
@@ -116,7 +125,7 @@ export async function fetchAnalytics() {
     // Profiles for the last two weeks, to chart daily growth
     supabaseAdmin
       .from("profiles")
-      .select("created_at")
+      .select("created_at,email")
       .gte("created_at", twoWeeksAgo.toISOString()),
 
     // Posts this week for trend + activity
@@ -133,14 +142,31 @@ export async function fetchAnalytics() {
       .limit(5000),
   ]);
 
-  const profiles = (profilesRes.data ?? []) as any[];
+  // Prop accounts (generated for seeding groups/hubs, always @sterlingtest.local)
+  // are admin tooling, not real users. They're split out everywhere below
+  // rather than just dropped — the "real" numbers exclude them so seeded
+  // content never inflates growth or engagement, but their own footprint is
+  // still surfaced separately so it isn't silently invisible either.
+  const allProfiles = (profilesRes.data ?? []) as any[];
+  const profiles = allProfiles.filter((p: any) => !isPropAccountEmail(p.email));
+  const propProfiles = allProfiles.filter((p: any) => isPropAccountEmail(p.email));
+  const propAccountIds = new Set(propProfiles.map((p: any) => String(p.id)));
+
   const reports = (reportsRes.data ?? []) as any[];
-  const posts = (postsRes.data ?? []) as any[];
+  const allPosts = (postsRes.data ?? []) as any[];
+  const posts = allPosts.filter((p: any) => !propAccountIds.has(String(p.author_id ?? "")));
+  const propPosts = allPosts.filter((p: any) => propAccountIds.has(String(p.author_id ?? "")));
   const hubs = (hubsRes.data ?? []) as any[];
   const reportsWeek = (reportsWeekRes.data ?? []) as any[];
-  const profilesGrowth = (profilesGrowthRes.data ?? []) as any[];
-  const postsWeek = (postsWeekRes.data ?? []) as any[];
-  const commentsWeek = (commentsWeekRes.data ?? []) as any[];
+  const allProfilesGrowth = (profilesGrowthRes.data ?? []) as any[];
+  const profilesGrowth = allProfilesGrowth.filter((p: any) => !isPropAccountEmail(p.email));
+  const propProfilesGrowth = allProfilesGrowth.filter((p: any) => isPropAccountEmail(p.email));
+  const allPostsWeek = (postsWeekRes.data ?? []) as any[];
+  const postsWeek = allPostsWeek.filter((p: any) => !propAccountIds.has(String(p.author_id ?? "")));
+  const propPostsWeek = allPostsWeek.filter((p: any) => propAccountIds.has(String(p.author_id ?? "")));
+  const allCommentsWeek = (commentsWeekRes.data ?? []) as any[];
+  const commentsWeek = allCommentsWeek.filter((c: any) => !propAccountIds.has(String(c.author_id ?? "")));
+  const propCommentsWeek = allCommentsWeek.filter((c: any) => propAccountIds.has(String(c.author_id ?? "")));
 
   // ── User role distribution ──
   const roleCounts: Record<string, number> = {};
@@ -276,6 +302,19 @@ export async function fetchAnalytics() {
     .sort((a, b) => (b.recent_comment_count - a.recent_comment_count) || (b.total_comment_count - a.total_comment_count))
     .slice(0, 8);
 
+  // ── Prop accounts: surfaced separately, never folded into the numbers above ──
+  const propActiveAccountIds = new Set<string>();
+  propPostsWeek.forEach((p: any) => { if (p.author_id) propActiveAccountIds.add(String(p.author_id)); });
+  propCommentsWeek.forEach((c: any) => { if (c.author_id) propActiveAccountIds.add(String(c.author_id)); });
+  const propAccounts: PropAccountsSummary = {
+    total: propAccountIds.size,
+    newThisWeek: propProfilesGrowth.filter((p: any) => new Date(p.created_at) >= weekAgo).length,
+    activeThisWeek: propActiveAccountIds.size,
+    totalPosts: propPosts.length,
+    postsThisWeek: propPostsWeek.length,
+    commentsThisWeek: propCommentsWeek.length,
+  };
+
   return {
     totalUsers,
     roleDistribution,
@@ -296,6 +335,7 @@ export async function fetchAnalytics() {
     accountActivityTrend,
     activeAccounts,
     trendingHubs,
+    propAccounts,
   };
 }
 

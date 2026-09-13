@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Tabs } from "@/components/dashboard/Tabs";
 import { BarChart, HorizontalBar, ProgressRow } from "@/components/ui/BarChart";
-import type { RoleDistribution, CategoryBreakdown, TimeSeriesPoint, TrendingHub } from "../lib/analytics";
+import type { RoleDistribution, CategoryBreakdown, TimeSeriesPoint, TrendingHub, PropAccountsSummary } from "../lib/analytics";
 
 type AnalyticsClientProps = {
   roleDistribution: RoleDistribution[];
@@ -20,6 +20,7 @@ type AnalyticsClientProps = {
   totalReports: number;
   totalPosts: number;
   activeAccounts: number;
+  propAccounts: PropAccountsSummary;
 };
 
 const trendColors: Record<string, string> = {
@@ -290,6 +291,38 @@ export function AnalyticsClient(props: AnalyticsClientProps) {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Row 4: Prop accounts, kept visibly separate from real-user numbers above */}
+      <div className="rounded-3xl border border-dashed border-blue-500/30 bg-blue-500/[0.03] p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-zinc-50">
+              Prop accounts
+              <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-300 ring-1 ring-blue-500/25">
+                Seeded
+              </span>
+            </h3>
+            <p className="mt-0.5 text-sm text-zinc-400">
+              Admin-generated test accounts used to seed groups and hubs — excluded from every number above.
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {[
+            { label: "Total prop accounts", value: props.propAccounts.total },
+            { label: "New this week", value: props.propAccounts.newThisWeek },
+            { label: "Active this week", value: props.propAccounts.activeThisWeek },
+            { label: "Total posts", value: props.propAccounts.totalPosts },
+            { label: "Posts this week", value: props.propAccounts.postsThisWeek },
+            { label: "Comments this week", value: props.propAccounts.commentsThisWeek },
+          ].map((stat) => (
+            <div key={stat.label} className="rounded-xl bg-zinc-900/60 px-3 py-2.5 ring-1 ring-zinc-800">
+              <p className="text-lg font-semibold tabular-nums text-zinc-100">{stat.value.toLocaleString()}</p>
+              <p className="mt-0.5 text-[11px] text-zinc-500">{stat.label}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>

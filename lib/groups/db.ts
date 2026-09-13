@@ -13,8 +13,7 @@ import {
   type MoveGroupsResponse,
   type MovedGroupResult,
 } from "@/lib/groups/types";
-
-const PROP_ACCOUNT_EMAIL_SUFFIX = "@sterlingtest.local";
+import { isPropAccountEmail } from "@/lib/prop-accounts";
 
 const GROUP_SELECT =
   "id,discussion_id,creator_id,title,description,category,categories,avatar_url,visibility,archived_at,created_at,updated_at";
@@ -693,11 +692,10 @@ export async function listGroupMembers(groupId: string): Promise<AdminGroupMembe
 
   return rows.map((r) => {
     const profile = profiles.get(String(r.user_id));
-    const email = profile?.email ? String(profile.email).toLowerCase() : "";
     return {
       user_id: String(r.user_id),
       role: r.role ?? "member",
-      is_prop_account: email.endsWith(PROP_ACCOUNT_EMAIL_SUFFIX),
+      is_prop_account: isPropAccountEmail(profile?.email),
       profile: profile
         ? { id: profile.id, full_name: profile.full_name, username: profile.username, avatar_url: profile.avatar_url }
         : null,

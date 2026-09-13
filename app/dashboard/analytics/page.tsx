@@ -85,6 +85,7 @@ export default async function AnalyticsPage() {
         totalReports={data.totalReports}
         totalPosts={data.totalPosts}
         activeAccounts={data.activeAccounts}
+        propAccounts={data.propAccounts}
       />
     </div>
   );

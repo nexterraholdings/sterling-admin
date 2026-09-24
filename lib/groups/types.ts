@@ -32,6 +32,7 @@ export type AdminGroupListItem = {
   created_at: string;
   member_count: number;
   post_count: number;
+  guidelines: string;
   hub: AdminGroupHub | null;
   creator: ProfileStub | null;
   /** True when the group is owned by the Sterling system account rather than a real user. */
@@ -116,6 +117,20 @@ export const GROUP_CATEGORY_LABELS: Record<string, string> = {
   campus: "Campus",
   interest: "Interest",
 };
+
+export const GROUP_GUIDELINES_MAX_CHARS = 4000;
+
+export function coerceGroupGuidelines(value: unknown): string {
+  return typeof value === "string" ? value.trim().slice(0, GROUP_GUIDELINES_MAX_CHARS) : "";
+}
+
+export function parseGroupGuidelines(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (text.length > GROUP_GUIDELINES_MAX_CHARS) {
+    throw new Error("discussion_group_guidelines_invalid");
+  }
+  return text;
+}
 
 export function groupCategoryLabel(id: string | null | undefined): string {
   if (!id) return "Group";

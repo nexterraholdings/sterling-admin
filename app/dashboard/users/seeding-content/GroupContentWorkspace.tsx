@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { ImagePlus, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, Folder, ImagePlus, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/app/dashboard/discussions/discussionUi";
 import { generateProAccount, listProAccounts, updateProAccount, type ProAccountStub } from "../actions";
+import type { AdminPropFolder } from "@/lib/groups/propFolders";
 import type { AdminGroupContentItem } from "@/lib/groups/types";
 import { ContentPost, inputCls, normalizeContentItem, readApiJson } from "./shared";
 
@@ -21,6 +22,8 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
   const [contentLoading, setContentLoading] = useState(true);
 
   const [proAccounts, setProAccounts] = useState<ProAccountStub[]>([]);
+  const [folders, setFolders] = useState<AdminPropFolder[]>([]);
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [postBody, setPostBody] = useState("");
@@ -61,10 +64,28 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
     }
   }, []);
 
+  const loadFolders = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/folders`);
+      const payload = await readApiJson<{ folders?: AdminPropFolder[]; error?: string }>(res);
+      if (!res.ok) throw new Error(payload.error ?? "Failed to load folders");
+      setFolders(payload.folders ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load folders");
+    }
+  }, [groupId]);
+
   useEffect(() => {
     loadContent();
     loadProAccounts();
-  }, [loadContent, loadProAccounts]);
+    loadFolders();
+  }, [loadContent, loadProAccounts, loadFolders]);
+
+  useEffect(() => {
+    if (openFolderId && !folders.some((folder) => folder.id === openFolderId)) {
+      setOpenFolderId(null);
+    }
+  }, [folders, openFolderId]);
 
   useEffect(() => {
     return () => {
@@ -274,9 +295,8 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
       });
       const payload = await readApiJson<{ item?: AdminGroupContentItem; error?: string }>(res);
       if (!res.ok || !payload.item) throw new Error(payload.error ?? "Failed to publish reply");
-      // The RPC flattens reply-to-a-reply onto the top-level comment (matching
-      // the app), so the returned item's parent_id may differ from the parentId
-      // we clicked "Reply" on — insert at the server-resolved location.
+      // A reply to a reply is stored on the comment, matching the app, so the
+      // returned parent_id can differ from the row we clicked. Insert there.
       const created = normalizeContentItem(payload.item as AdminGroupContentItem);
       setContent((prev) => insertReply(prev, created.parent_id ?? parentId, created));
       return true;
@@ -287,6 +307,15 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
   }
 
   const selectedAccountLabel = proAccounts.find((a) => a.id === selectedAccountId)?.username ?? null;
+  const openFolder = folders.find((folder) => folder.id === openFolderId) ?? null;
+  const visibleAccounts = useMemo(() => {
+    if (openFolder) {
+      const inside = new Set(openFolder.userIds);
+      return proAccounts.filter((account) => inside.has(account.id));
+    }
+    const filed = new Set(folders.flatMap((folder) => folder.userIds));
+    return proAccounts.filter((account) => !filed.has(account.id));
+  }, [proAccounts, folders, openFolder]);
 
   return (
     <div className="space-y-4">
@@ -296,59 +325,103 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
         </div>
       )}
 
-      <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/50 p-4">
+      {(folders.length > 0 || proAccounts.length > 0) && (
+        <div className="space-y-2">
+          {openFolder ? (
+            <button
+              type="button"
+              onClick={() => setOpenFolderId(null)}
+              className="flex items-center gap-1 text-sm font-semibold text-zinc-200"
+            >
+              <ChevronLeft className="h-4 w-4 text-blue-300" />
+              <span className="text-blue-300">Folders</span>
+              <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />
+              <span className="truncate">{openFolder.name}</span>
+            </button>
+          ) : folders.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {folders.map((folder) => {
+                const count = folder.userIds.filter((id) => proAccounts.some((account) => account.id === id)).length;
+                return (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    onClick={() => setOpenFolderId(folder.id)}
+                    className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-left transition hover:border-zinc-600"
+                  >
+                    <Folder className="h-4 w-4 shrink-0 text-blue-300" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-semibold text-zinc-100">{folder.name}</span>
+                      <span className="text-[10px] text-zinc-500">
+                        {count} account{count === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {visibleAccounts.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {visibleAccounts.map((account) => (
+                <div
+                  key={account.id}
+                  className={`flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-1.5 transition ${
+                    selectedAccountId === account.id
+                      ? "border-blue-500/50 bg-blue-500/10"
+                      : "border-zinc-800 bg-zinc-950 hover:border-zinc-700"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAccountId(account.id)}
+                    className="flex items-center gap-2"
+                    title={account.fullName ?? undefined}
+                  >
+                    {account.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={account.avatarUrl} alt="" className="h-6 w-6 rounded-full object-cover" />
+                    ) : (
+                      <Avatar id={account.id} person={{ full_name: account.fullName, username: account.username }} size="sm" />
+                    )}
+                    <span className="text-xs font-medium text-zinc-200">
+                      @{account.username ?? account.id.slice(0, 8)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openEditAccount(account)}
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-800 hover:text-blue-300"
+                    title="Edit account"
+                    aria-label={`Edit @${account.username ?? "account"}`}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : openFolder ? (
+            <p className="text-xs text-zinc-500">Nothing in this folder yet.</p>
+          ) : null}
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-zinc-200">Publish as a prop account</div>
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-50">New post</h2>
+            <p className="mt-0.5 text-xs text-zinc-500">Publishes into this group as the account you pick.</p>
+          </div>
           <Button
             size="sm"
             variant="secondary"
             className="border-zinc-700 text-zinc-100"
             onClick={() => (showAccountForm ? closeAccountForm() : openCreateAccount())}
           >
-            {showAccountForm ? "Cancel" : "+ New prop account"}
+            {showAccountForm ? "Cancel" : "New prop account"}
           </Button>
         </div>
-
-        {proAccounts.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {proAccounts.map((account) => (
-              <div
-                key={account.id}
-                className={`flex items-center gap-1.5 rounded-xl border py-1 pl-1.5 pr-2 transition ${
-                  selectedAccountId === account.id
-                    ? "border-blue-500/50 bg-blue-500/10"
-                    : "border-zinc-800 bg-zinc-950 hover:border-zinc-700"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSelectedAccountId(account.id)}
-                  className="flex items-center gap-2"
-                  title={account.fullName ?? undefined}
-                >
-                  {account.avatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={account.avatarUrl} alt="" className="h-6 w-6 rounded-full object-cover" />
-                  ) : (
-                    <Avatar id={account.id} person={{ full_name: account.fullName, username: account.username }} size="sm" />
-                  )}
-                  <span className="text-xs font-medium text-zinc-200">
-                    @{account.username ?? account.id.slice(0, 8)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openEditAccount(account)}
-                  className="text-zinc-500 hover:text-blue-300"
-                  title="Edit account"
-                  aria-label="Edit account"
-                >
-                  ✎
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
 
         {showAccountForm && (
           <div className="mb-4 grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-950 p-4 md:grid-cols-[80px_1fr]">
@@ -451,25 +524,33 @@ export function GroupContentWorkspace({ groupId }: { groupId: string }) {
         </div>
       </div>
 
-      <div className="space-y-2">
+      <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+        <div className="border-b border-zinc-800 px-4 py-3">
+          <h2 className="text-sm font-semibold text-zinc-50">Posts</h2>
+          <p className="text-[11px] text-zinc-500">
+            {contentLoading ? "Loading..." : `${content.length} post${content.length === 1 ? "" : "s"}`}
+          </p>
+        </div>
         {contentLoading ? (
-          <div className="p-6 text-center text-sm text-zinc-500">Loading content...</div>
+          <div className="px-4 py-10 text-center text-sm text-zinc-500">Loading posts...</div>
         ) : content.length === 0 ? (
-          <div className="p-6 text-center text-sm text-zinc-500">No content in this group yet.</div>
+          <div className="px-4 py-10 text-center text-sm text-zinc-500">No posts in this group yet.</div>
         ) : (
-          content.map((item) => (
-            <ContentPost
-              key={item.id}
-              item={item}
-              ctx={{
-                replyAsLabel: selectedAccountLabel ? `@${selectedAccountLabel}` : null,
-                onReply: handleReply,
-                onDelete: handleDelete,
-              }}
-            />
-          ))
+          <div className="space-y-3 p-3">
+            {content.map((item) => (
+              <ContentPost
+                key={item.id}
+                item={item}
+                ctx={{
+                  replyAsLabel: selectedAccountLabel ? `@${selectedAccountLabel}` : null,
+                  onReply: handleReply,
+                  onDelete: handleDelete,
+                }}
+              />
+            ))}
+          </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

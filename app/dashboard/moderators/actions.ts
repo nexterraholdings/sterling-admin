@@ -49,6 +49,8 @@ async function countActiveOwners(exceptUserId?: string): Promise<number> {
 export async function fetchModerators(): Promise<{
   rows: ModeratorRow[];
   canManage: boolean;
+  actorId: string;
+  actorRole: AdminRole;
 }> {
   const admin = await requireAdmin(OPERATOR_ROLES);
   requireServiceRole();
@@ -96,7 +98,7 @@ export async function fetchModerators(): Promise<{
     }
   );
 
-  return { rows, canManage: admin.role === "owner" };
+  return { rows, canManage: admin.role === "owner", actorId: admin.id, actorRole: admin.role };
 }
 
 export async function grantModerator(params: {
@@ -286,11 +288,8 @@ export async function updateModerator(params: {
   const admin = await requireAdmin(OWNER_ROLES);
   requireServiceRole();
 
-  if (params.userId === admin.id && params.disabled) {
-    throw new Error("You cannot disable your own access");
-  }
-  if (params.userId === admin.id && params.role && params.role !== "owner") {
-    throw new Error("You cannot demote your own owner role");
+  if (params.userId === admin.id) {
+    throw new Error("You cannot change your own access");
   }
 
   const { data: current, error: currentError } = await supabaseAdmin
@@ -300,6 +299,10 @@ export async function updateModerator(params: {
     .maybeSingle();
   if (currentError) throw new Error(currentError.message);
   if (!current) throw new Error("Moderator not found");
+
+  if (current.role === "owner" && admin.role !== "owner") {
+    throw new Error("Only an owner can change an owner");
+  }
 
   const nextRole = params.role ?? current.role;
   if (!isAdminRole(nextRole)) throw new Error("Invalid role");
@@ -367,6 +370,10 @@ export async function revokeModerator(userId: string): Promise<void> {
     .maybeSingle();
   if (currentError) throw new Error(currentError.message);
   if (!current) return;
+
+  if (current.role === "owner" && admin.role !== "owner") {
+    throw new Error("Only an owner can remove an owner");
+  }
 
   if (current.role === "owner" && current.disabled_at == null && (await countActiveOwners(userId)) < 1) {
     throw new Error("Keep at least one active owner");

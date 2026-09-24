@@ -3,16 +3,25 @@
 import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
+import { PROP_ACCOUNT_EMAIL_PATTERN, EXCLUDE_PROP_ACCOUNT_EMAIL_OR } from "@/lib/prop-accounts";
 import type { AuthUserRow, UserDeleteTarget, UserProfile } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
-export type FetchFilter = { account_role?: string; flagged?: boolean };
+export type FetchSort = "newest" | "oldest" | "name";
+export type FetchFilter = {
+  account_role?: string;
+  flagged?: boolean;
+  createdSince?: string;
+  /** true = only @sterlingtest.local prop accounts; false/omit = exclude them */
+  seeded?: boolean;
+};
 
 export async function fetchProfiles(
   page: number,
   filter: FetchFilter = {},
-  search = ""
+  search = "",
+  sort: FetchSort = "newest"
 ): Promise<{ profiles: UserProfile[]; totalCount: number }> {
   await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
@@ -27,9 +36,17 @@ export async function fetchProfiles(
     .from("profiles")
     .select(
       `id,email,full_name,username,role,operating_markets,market_other,main_goals,created_at,updated_at,avatar_url,banner_url,bio,account_role,moderation_strike_count,phone_number`
-    )
-    .order("full_name", { ascending: true })
-    .range(offset, offset + PAGE_SIZE - 1);
+    );
+
+  if (sort === "oldest") {
+    dataQuery = dataQuery.order("created_at", { ascending: true });
+  } else if (sort === "name") {
+    dataQuery = dataQuery.order("full_name", { ascending: true });
+  } else {
+    dataQuery = dataQuery.order("created_at", { ascending: false });
+  }
+
+  dataQuery = dataQuery.range(offset, offset + PAGE_SIZE - 1);
 
   if (filter.account_role) {
     countQuery = countQuery.eq("account_role", filter.account_role);
@@ -38,6 +55,17 @@ export async function fetchProfiles(
   if (filter.flagged) {
     countQuery = countQuery.gt("moderation_strike_count", 0);
     dataQuery = dataQuery.gt("moderation_strike_count", 0);
+  }
+  if (filter.createdSince) {
+    countQuery = countQuery.gte("created_at", filter.createdSince);
+    dataQuery = dataQuery.gte("created_at", filter.createdSince);
+  }
+  if (filter.seeded) {
+    countQuery = countQuery.ilike("email", PROP_ACCOUNT_EMAIL_PATTERN);
+    dataQuery = dataQuery.ilike("email", PROP_ACCOUNT_EMAIL_PATTERN);
+  } else {
+    countQuery = countQuery.or(EXCLUDE_PROP_ACCOUNT_EMAIL_OR);
+    dataQuery = dataQuery.or(EXCLUDE_PROP_ACCOUNT_EMAIL_OR);
   }
   if (search.trim()) {
     // Escape PostgREST filter/ilike-reserved characters so user input can't
@@ -622,20 +650,12 @@ export type ProAccountStub = {
   email: string | null;
   avatarUrl: string | null;
   bio: string | null;
+  createdAt?: string | null;
 };
 
 export async function listProAccounts(): Promise<ProAccountStub[]> {
   await requireAdmin(OPERATOR_ROLES);
   await requireServiceRole();
-
-  const { data, error } = await supabaseAdmin
-    .from("profiles")
-    .select("id,username,full_name,email,avatar_url,bio,created_at")
-    .ilike("email", "%@sterlingtest.local")
-    .order("created_at", { ascending: false })
-    .limit(500);
-
-  if (error) throw new Error(error.message);
 
   type ProAccountRow = {
     id: string;
@@ -644,15 +664,32 @@ export async function listProAccounts(): Promise<ProAccountStub[]> {
     email: string | null;
     avatar_url: string | null;
     bio: string | null;
+    created_at: string | null;
   };
 
-  return ((data ?? []) as ProAccountRow[]).map((row) => ({
+  const pageSize = 1000;
+  const rows: ProAccountRow[] = [];
+  for (let from = 0; from < 20000; from += pageSize) {
+    const { data, error } = await supabaseAdmin
+      .from("profiles")
+      .select("id,username,full_name,email,avatar_url,bio,created_at")
+      .ilike("email", "%@sterlingtest.local")
+      .order("created_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    const batch = (data ?? []) as ProAccountRow[];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+
+  return rows.map((row) => ({
     id: String(row.id),
     username: row.username ?? null,
     fullName: row.full_name ?? null,
     email: row.email ?? null,
     avatarUrl: row.avatar_url ?? null,
     bio: row.bio ?? null,
+    createdAt: row.created_at ?? null,
   }));
 }
 
@@ -668,7 +705,7 @@ export async function updateProAccount(
 
   const { data: existing, error: fetchError } = await supabaseAdmin
     .from("profiles")
-    .select("id,email,avatar_url")
+    .select("id,email,avatar_url,username")
     .eq("id", accountId)
     .maybeSingle();
   if (fetchError) throw new Error(fetchError.message);
@@ -678,7 +715,7 @@ export async function updateProAccount(
   }
 
   const name = String(formData.get("full_name") ?? "").trim() || "Pro Creator Test";
-  const fallbackUsername = `creator_${Math.round(Math.random() * 99999)}`;
+  const fallbackUsername = existing.username || `creator_${Math.round(Math.random() * 99999)}`;
   const username = sanitizeUsername(String(formData.get("username") ?? ""), fallbackUsername);
   const bio = String(formData.get("bio") ?? "").trim();
   const avatarEntry = formData.get("avatar");
@@ -708,7 +745,16 @@ export async function updateProAccount(
       updated_at: new Date().toISOString(),
     })
     .eq("id", accountId);
-  if (updateError) throw new Error(updateError.message);
+  if (updateError) {
+    const message = updateError.message || "Could not save the prop account";
+    if (message.toLowerCase().includes("not authorized to update this profile")) {
+      throw new Error("Could not save the username. Retry in a moment.");
+    }
+    if (message.toLowerCase().includes("duplicate") || message.toLowerCase().includes("unique")) {
+      throw new Error("That username is already taken.");
+    }
+    throw new Error(message);
+  }
 
   return {
     id: accountId,

@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState } from "react";
 import { DISCUSSION_HUB_TABS, type DiscussionHubTab } from "@/lib/discussions/types";
 import {
   Avatar,
-  LifecyclePill,
   MetricPill,
   personLabel,
   ReportsBadge,
@@ -18,7 +17,7 @@ import { DiscussionAnalyticsPanel } from "./DiscussionAnalyticsPanel";
 import type { DetailResponse } from "./discussionDetailTypes";
 
 const MAIN_SECTIONS = [
-  { id: "overview" as const, label: "Overview", hint: "Lifecycle, map, settings" },
+  { id: "overview" as const, label: "Overview", hint: "Map and settings" },
   { id: "hub" as const, label: "Hub content", hint: "Feed, people, polls" },
   { id: "analytics" as const, label: "Analytics", hint: "Views and trends" },
 ];
@@ -86,7 +85,7 @@ export function DiscussionDetailClient({ id }: { id: string }) {
       <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6">
         <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{error ?? "Hub not found"}</div>
         <Link href="/dashboard/discussions" className="mt-4 inline-block text-sm text-zinc-400 hover:text-zinc-200">
-          ← Back to discussions
+          ← Back to hubs
         </Link>
       </div>
     );
@@ -99,7 +98,7 @@ export function DiscussionDetailClient({ id }: { id: string }) {
     <div className="space-y-6 pb-12">
       <nav className="flex flex-wrap items-center gap-2 text-sm">
         <Link href="/dashboard/discussions" className="text-zinc-500 transition hover:text-zinc-300">
-          Discussions
+          Hubs
         </Link>
         <span className="text-zinc-700">/</span>
         <span className="truncate text-zinc-300">{discussion.title}</span>
@@ -108,11 +107,12 @@ export function DiscussionDetailClient({ id }: { id: string }) {
       <header className="-mx-1 rounded-3xl border border-zinc-800 bg-zinc-900 p-5 shadow-sm sm:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <LifecyclePill status={discussion.lifecycle_status} />
-              {pendingReports > 0 && <ReportsBadge count={pendingReports} />}
-            </div>
-            <h1 className="mt-3 text-2xl font-semibold leading-tight text-zinc-50 sm:text-3xl">{discussion.title}</h1>
+            {pendingReports > 0 && (
+              <div className="mb-3">
+                <ReportsBadge count={pendingReports} />
+              </div>
+            )}
+            <h1 className="text-2xl font-semibold leading-tight text-zinc-50 sm:text-3xl">{discussion.title}</h1>
             {discussion.description && (
               <p className="mt-2 line-clamp-2 max-w-3xl text-sm leading-relaxed text-zinc-400">{discussion.description}</p>
             )}

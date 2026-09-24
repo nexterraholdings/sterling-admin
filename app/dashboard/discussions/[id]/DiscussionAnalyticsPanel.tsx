@@ -8,7 +8,6 @@ import {
 } from "@/lib/discussions/mapDiscussionAnalytics";
 import {
   EmptyState,
-  LifecyclePill,
   SectionCard,
   formatRelativeTime,
 } from "../discussionUi";
@@ -215,10 +214,7 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 px-5 py-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <LifecyclePill status={discussion.lifecycle_status} />
-        </div>
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="text-sm text-zinc-500">
           Same metrics as the mobile steward analytics screen. Views and tab opens count once per member per day;
           steward/moderator self-use is excluded from reach where noted in product copy.
         </p>
@@ -324,7 +320,7 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
         </SectionCard>
       )}
 
-      <SectionCard title="Stewardship" description="Lifecycle deadlines from the hub record.">
+      <SectionCard title="Stewardship" description="Check-in dates from the hub record.">
         <dl className="grid gap-3 sm:grid-cols-2 text-sm">
           <div>
             <dt className="text-[10px] uppercase text-zinc-500">Next check-in due</dt>
@@ -342,18 +338,6 @@ export function DiscussionAnalyticsPanel({ discussionId, discussion }: Props) {
                 : "Never"}
             </dd>
           </div>
-          {discussion.grace_expires_at && (
-            <div>
-              <dt className="text-[10px] uppercase text-zinc-500">Grace ends</dt>
-              <dd className="text-zinc-300">{formatDiscussionDate(discussion.grace_expires_at)}</dd>
-            </div>
-          )}
-          {discussion.bootstrap_expires_at && (
-            <div>
-              <dt className="text-[10px] uppercase text-zinc-500">Bootstrap ends</dt>
-              <dd className="text-zinc-300">{formatDiscussionDate(discussion.bootstrap_expires_at)}</dd>
-            </div>
-          )}
         </dl>
       </SectionCard>
     </div>

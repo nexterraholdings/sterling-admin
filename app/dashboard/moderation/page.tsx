@@ -1659,27 +1659,7 @@ export default function ModerationPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Moderation</p>
-        <h2 className="mt-2 text-2xl font-semibold text-zinc-50">
-          {pageView === "reports"
-            ? "Moderation overview"
-            : pageView === "flagged"
-            ? "Priority review queue"
-            : pageView === "banned"
-            ? "Banned users"
-            : "Automated abuse alerts"}
-        </h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-          {pageView === "reports"
-            ? "Live counts from the database. Review and act on pending reports directly from this queue."
-            : pageView === "flagged"
-            ? "Accounts with active moderation strikes and/or rule-based bot signals (device sharing, posting bursts, duplicate content), ordered by combined severity. Use the review panel to inspect reports, signals, and adjust strikes."
-            : pageView === "banned"
-            ? "Manage active user and device bans. Review ban reasons, expiry, and unban when necessary."
-            : "Rate-limit signals triggered automatically by the database when a user exceeds message, post, or comment velocity thresholds. Confirm the timeout, unban early, or dismiss false positives."}
-        </p>
-        <div className="mt-5 border-t border-zinc-800 pt-5">
+      <div>
           <Tabs
             tabs={[
               { id: "reports", label: "Reports",          color: "amber" },
@@ -1691,7 +1671,6 @@ export default function ModerationPage() {
             variant="segmented"
             onChange={(id) => setPageView(id as PageView)}
           />
-        </div>
       </div>
 
       {pageView === "reports" && <ReportsView />}

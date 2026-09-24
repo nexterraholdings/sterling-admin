@@ -1,44 +1,68 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { PROP_ACCOUNT_EMAIL_SUFFIX } from "@/lib/prop-accounts";
+import { PROP_ACCOUNT_EMAIL_PATTERN } from "@/lib/prop-accounts";
+
+function minus(total: number | null | undefined, seeded: number | null | undefined): number {
+  return Math.max(0, (total ?? 0) - (seeded ?? 0));
+}
+
+async function countSeededTopLevelPosts(propAccountIds: string[]): Promise<number> {
+  if (propAccountIds.length === 0) return 0;
+  const chunkSize = 200;
+  const chunks: string[][] = [];
+  for (let i = 0; i < propAccountIds.length; i += chunkSize) {
+    chunks.push(propAccountIds.slice(i, i + chunkSize));
+  }
+  const counts = await Promise.all(
+    chunks.map(async (chunk) => {
+      const { count } = await supabaseAdmin
+        .from("area_discussion_comments")
+        .select("id", { count: "exact", head: true })
+        .is("parent_id", null)
+        .in("author_id", chunk);
+      return count ?? 0;
+    })
+  );
+  return counts.reduce((sum, n) => sum + n, 0);
+}
 
 export async function fetchDashboardMetrics() {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
+  const todayIso = todayStart.toISOString();
 
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekIso = weekAgo.toISOString();
 
   // Prop accounts (seeded for group/hub content, always @sterlingtest.local)
-  // are admin tooling, not real users — excluded from every count below so
-  // seeded activity never inflates these headline numbers.
+  // are admin tooling, not real users. User headline numbers are total − seeded
+  // so a fragile `not.ilike` filter can't accidentally keep them in the count.
   const { data: propAccountRows } = await supabaseAdmin
     .from("profiles")
     .select("id")
-    .ilike("email", `%${PROP_ACCOUNT_EMAIL_SUFFIX}`)
+    .ilike("email", PROP_ACCOUNT_EMAIL_PATTERN)
     .limit(10000);
   const propAccountIds = (propAccountRows ?? []).map((row: { id: string }) => String(row.id));
-  // Postgres's NULL semantics mean a plain `.not(col, "ilike"/"in", ...)` would
-  // also silently exclude rows where the column itself is null — an `.or()`
-  // that explicitly keeps nulls avoids undercounting real users/posts that
-  // just don't have an email/author on file.
-  const notPropEmail = "email.is.null,email.not.ilike." + `%${PROP_ACCOUNT_EMAIL_SUFFIX}`;
-  const notPropAuthor =
-    propAccountIds.length > 0 ? `author_id.is.null,author_id.not.in.(${propAccountIds.join(",")})` : null;
 
   const [
-    usersRes,
+    usersAllRes,
+    usersSeededRes,
     pendingFlagsRes,
     reportsTodayRes,
     modActionsRes,
-    newUsersTodayRes,
-    totalPostsRes,
+    newUsersTodayAllRes,
+    newUsersTodaySeededRes,
+    hubPostsAllRes,
     reportsWeekRes,
-    usersWeekRes,
+    usersWeekAllRes,
+    usersWeekSeededRes,
+    hubPostsSeeded,
   ] = await Promise.all([
+    supabaseAdmin.from("profiles").select("id", { count: "exact", head: true }),
     supabaseAdmin
       .from("profiles")
       .select("id", { count: "exact", head: true })
-      .or(notPropEmail),
+      .ilike("email", PROP_ACCOUNT_EMAIL_PATTERN),
 
     supabaseAdmin
       .from("reports")
@@ -48,46 +72,53 @@ export async function fetchDashboardMetrics() {
     supabaseAdmin
       .from("reports")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", todayStart.toISOString()),
+      .gte("created_at", todayIso),
 
-    supabaseAdmin
-      .from("audit_logs")
-      .select("id", { count: "exact", head: true }),
+    supabaseAdmin.from("audit_logs").select("id", { count: "exact", head: true }),
 
     supabaseAdmin
       .from("profiles")
       .select("id", { count: "exact", head: true })
-      .or(notPropEmail)
-      .gte("created_at", todayStart.toISOString()),
+      .gte("created_at", todayIso),
+    supabaseAdmin
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .ilike("email", PROP_ACCOUNT_EMAIL_PATTERN)
+      .gte("created_at", todayIso),
 
-    notPropAuthor
-      ? supabaseAdmin
-          .from("posts")
-          .select("id", { count: "exact", head: true })
-          .or(notPropAuthor)
-      : supabaseAdmin.from("posts").select("id", { count: "exact", head: true }),
+    // Live feed posts live in hub/group threads, not the legacy `posts` table.
+    supabaseAdmin
+      .from("area_discussion_comments")
+      .select("id", { count: "exact", head: true })
+      .is("parent_id", null),
 
     supabaseAdmin
       .from("reports")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", weekAgo.toISOString()),
+      .gte("created_at", weekIso),
 
     supabaseAdmin
       .from("profiles")
       .select("id", { count: "exact", head: true })
-      .or(notPropEmail)
-      .gte("created_at", weekAgo.toISOString()),
+      .gte("created_at", weekIso),
+    supabaseAdmin
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .ilike("email", PROP_ACCOUNT_EMAIL_PATTERN)
+      .gte("created_at", weekIso),
+
+    countSeededTopLevelPosts(propAccountIds),
   ]);
 
   return {
-    activeUsers:       usersRes.count        ?? 0,
-    pendingFlags:      pendingFlagsRes.count  ?? 0,
-    reportsToday:      reportsTodayRes.count  ?? 0,
-    modActions:        modActionsRes.count    ?? 0,
-    newUsersToday:     newUsersTodayRes.count ?? 0,
-    totalPosts:        totalPostsRes.count    ?? 0,
-    reportsThisWeek:   reportsWeekRes.count   ?? 0,
-    newUsersThisWeek:  usersWeekRes.count     ?? 0,
+    activeUsers: minus(usersAllRes.count, usersSeededRes.count),
+    pendingFlags: pendingFlagsRes.count ?? 0,
+    reportsToday: reportsTodayRes.count ?? 0,
+    modActions: modActionsRes.count ?? 0,
+    newUsersToday: minus(newUsersTodayAllRes.count, newUsersTodaySeededRes.count),
+    totalPosts: minus(hubPostsAllRes.count, hubPostsSeeded),
+    reportsThisWeek: reportsWeekRes.count ?? 0,
+    newUsersThisWeek: minus(usersWeekAllRes.count, usersWeekSeededRes.count),
   };
 }
 

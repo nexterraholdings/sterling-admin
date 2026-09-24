@@ -83,26 +83,6 @@ export function BlogListView({
 
   return (
     <div className="space-y-6">
-      <div className="relative overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-emerald-500/10 blur-3xl" />
-        <div className="relative flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Content</p>
-            <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Blog</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
-              Write in Markdown, preview the public page, then publish to sterlingtheapp.com/blog.
-            </p>
-          </div>
-          <Link
-            href="/dashboard/blog/new"
-            className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-200"
-          >
-            <Plus className="size-4" />
-            New post
-          </Link>
-        </div>
-      </div>
-
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative block min-w-0 flex-1 sm:max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-500" />
@@ -113,6 +93,7 @@ export function BlogListView({
             className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 py-2.5 pl-10 pr-3 text-sm text-zinc-50 outline-none placeholder:text-zinc-600 focus:border-emerald-500/40"
           />
         </label>
+        <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-2xl border border-zinc-800 bg-zinc-900 p-1">
           {(["all", "published", "draft"] as const).map((value) => (
             <button
@@ -126,6 +107,14 @@ export function BlogListView({
               {value}
             </button>
           ))}
+        </div>
+          <Link
+            href="/dashboard/blog/new"
+            className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-200"
+          >
+            <Plus className="size-4" />
+            New post
+          </Link>
         </div>
       </div>
 

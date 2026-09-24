@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { EXCLUDE_PROP_ACCOUNT_EMAIL_OR, isPropAccountEmail } from "@/lib/prop-accounts";
 
 export type ActivityItem = {
   id: string;
@@ -27,10 +28,11 @@ export async function fetchRecentActivity(): Promise<{
 
     supabaseAdmin
       .from("profiles")
-      .select("id,created_at,full_name,username,account_role")
+      .select("id,created_at,full_name,username,account_role,email")
+      .or(EXCLUDE_PROP_ACCOUNT_EMAIL_OR)
       .gte("created_at", threeDaysAgo.toISOString())
       .order("created_at", { ascending: false })
-      .limit(10),
+      .limit(20),
   ]);
 
   const reports: ActivityItem[] = ((reportsRes.data ?? []) as any[]).map((r) => ({
@@ -42,14 +44,17 @@ export async function fetchRecentActivity(): Promise<{
     severity: r.status === "pending" ? "high" as const : "medium" as const,
   }));
 
-  const users: ActivityItem[] = ((usersRes.data ?? []) as any[]).map((u) => ({
-    id: `user-${u.id}`,
-    type: "user" as const,
-    title: u.full_name ?? u.username ?? "New user",
-    detail: `Joined as ${u.account_role}`,
-    timestamp: timeAgo(u.created_at),
-    severity: "low" as const,
-  }));
+  const users: ActivityItem[] = ((usersRes.data ?? []) as any[])
+    .filter((u) => !isPropAccountEmail(u.email))
+    .slice(0, 10)
+    .map((u) => ({
+      id: `user-${u.id}`,
+      type: "user" as const,
+      title: u.full_name ?? u.username ?? "New user",
+      detail: `Joined as ${u.account_role}`,
+      timestamp: timeAgo(u.created_at),
+      severity: "low" as const,
+    }));
 
   const allActivity = [...reports, ...users].sort(
     (a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp)

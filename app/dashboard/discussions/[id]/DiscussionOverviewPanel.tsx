@@ -5,12 +5,6 @@ import { useEffect, useState } from "react";
 import type { DetailResponse } from "./discussionDetailTypes";
 import { formatDiscussionDate, profileLabel } from "./discussionDetailTypes";
 import {
-  ADMIN_DISCUSSION_LIFECYCLE_OPTIONS,
-  DISCUSSION_LIFECYCLE_LABELS,
-  normalizeAdminLifecycleStatus,
-  normalizeDiscussionLifecycleStatus,
-} from "@/lib/discussions/lifecycle";
-import {
   DetailAccordion,
   FilterField,
   PrimaryButton,
@@ -45,9 +39,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
 
   const [editTitle, setEditTitle] = useState(sanitizeHubNameInput(discussion.title ?? ""));
   const [editDescription, setEditDescription] = useState(discussion.description ?? "");
-  const lifecyclePhase = normalizeDiscussionLifecycleStatus(discussion.lifecycle_status);
-  const isBootstrapPhase = lifecyclePhase === "bootstrap";
-  const [editLifecycle, setEditLifecycle] = useState(lifecyclePhase);
   const [editLat, setEditLat] = useState(String(discussion.center_lat ?? ""));
   const [editLng, setEditLng] = useState(String(discussion.center_lng ?? ""));
   const [editHint, setEditHint] = useState(discussion.location_hint ?? "");
@@ -58,7 +49,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
   useEffect(() => {
     setEditTitle(sanitizeHubNameInput(discussion.title ?? ""));
     setEditDescription(discussion.description ?? "");
-    setEditLifecycle(normalizeDiscussionLifecycleStatus(discussion.lifecycle_status));
     setEditLat(String(discussion.center_lat ?? ""));
     setEditLng(String(discussion.center_lng ?? ""));
     setEditHint(discussion.location_hint ?? "");
@@ -118,19 +108,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
-      const currentLifecycle = normalizeDiscussionLifecycleStatus(discussion.lifecycle_status);
-      if (editLifecycle !== currentLifecycle) {
-        if (editLifecycle === "bootstrap") {
-          throw new Error("Starting up cannot be set from admin.");
-        }
-        const life = await fetch(`/api/admin/discussions/${id}/lifecycle`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: editLifecycle }),
-        });
-        const lifeJson = await life.json();
-        if (!life.ok) throw new Error(lifeJson.error || "Lifecycle update failed");
-      }
       onReload();
     } catch (e) {
       onActionError(e instanceof Error ? e.message : "Request failed");
@@ -236,7 +213,7 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
 
         <DetailAccordion
           title="Edit hub"
-          summary="Title, description, lifecycle phase"
+          summary="Title and description"
           defaultOpen
         >
           <div className="grid gap-4 sm:grid-cols-2">
@@ -251,27 +228,6 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
                 spellCheck={false}
               />
               <p className="mt-1.5 text-xs text-zinc-500">{HUB_NAME_HINT}</p>
-            </FilterField>
-            <FilterField label="Lifecycle">
-              <select
-                {...filterInputProps()}
-                value={editLifecycle}
-                onChange={(e) => setEditLifecycle(normalizeDiscussionLifecycleStatus(e.target.value))}
-              >
-                {isBootstrapPhase && (
-                  <option value="bootstrap">{DISCUSSION_LIFECYCLE_LABELS.bootstrap}</option>
-                )}
-                {ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1.5 text-xs text-zinc-500">
-                {isBootstrapPhase
-                  ? "Creation phase. Choose Live (or another status) and save to leave Starting up. You cannot put a hub back into this state."
-                  : ADMIN_DISCUSSION_LIFECYCLE_OPTIONS.find((o) => o.value === editLifecycle)?.description}
-              </p>
             </FilterField>
             <div className="flex items-end sm:col-span-1">
               <PrimaryButton disabled={busy} onClick={saveMetadata}>
@@ -289,14 +245,8 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
           </div>
         </DetailAccordion>
 
-        <DetailAccordion title="Stewardship" summary="Check-in deadlines and claim window">
+        <DetailAccordion title="Stewardship" summary="Check-in dates and claim window">
           <dl className="grid gap-3 sm:grid-cols-2">
-            {discussion.bootstrap_expires_at && (
-              <div>
-                <dt className="text-[10px] uppercase text-zinc-500">Bootstrap ends</dt>
-                <dd className="text-sm text-zinc-300">{formatDiscussionDate(discussion.bootstrap_expires_at)}</dd>
-              </div>
-            )}
             {discussion.check_in_due_at && (
               <div>
                 <dt className="text-[10px] uppercase text-zinc-500">Check-in due</dt>
@@ -309,30 +259,19 @@ export function DiscussionOverviewPanel({ id, data, onReload, onActionError, onD
                 <dd className="text-sm text-zinc-300">{formatRelativeTime(discussion.last_check_in_at)}</dd>
               </div>
             )}
-            {discussion.grace_expires_at && (
-              <div>
-                <dt className="text-[10px] uppercase text-zinc-500">Grace ends</dt>
-                <dd className="text-sm text-zinc-300">{formatDiscussionDate(discussion.grace_expires_at)}</dd>
-              </div>
-            )}
           </dl>
 
-          {(normalizeAdminLifecycleStatus(discussion.lifecycle_status) === "claimable"
-            || claimWindowLines.length > 0) && (
+          {claimWindowLines.length > 0 && (
             <div className="mt-4 rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
               <p className="text-sm font-semibold text-violet-200">Stewardship claim window</p>
-              {claimWindowLines.length > 0 ? (
-                <dl className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {claimWindowLines.map((row) => (
-                    <div key={row.label}>
-                      <dt className="text-[10px] uppercase text-zinc-500">{row.label}</dt>
-                      <dd className="text-sm font-medium text-zinc-200">{row.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : (
-                <p className="mt-2 text-xs text-zinc-500">Hub locked on gate until a steward is chosen.</p>
-              )}
+              <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+                {claimWindowLines.map((row) => (
+                  <div key={row.label}>
+                    <dt className="text-[10px] uppercase text-zinc-500">{row.label}</dt>
+                    <dd className="text-sm font-medium text-zinc-200">{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
             </div>
           )}
         </DetailAccordion>

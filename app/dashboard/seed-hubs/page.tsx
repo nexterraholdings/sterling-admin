@@ -1,5 +1,5 @@
-import { SeedHubsClient } from "./SeedHubsClient";
+import { redirect } from "next/navigation";
 
 export default function SeedHubsPage() {
-  return <SeedHubsClient />;
+  redirect("/dashboard/discussions/seed");
 }

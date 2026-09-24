@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AdminGroupListItem } from "@/lib/groups/types";
 import type { SeededHubListItem } from "@/lib/seeded-hubs/types";
-import { MembersPanel } from "@/app/dashboard/groups/[groupId]/MembersPanel";
-import { GroupContentWorkspace } from "../../GroupContentWorkspace";
+import { GroupOpsTabs } from "@/app/dashboard/groups/[groupId]/GroupOpsTabs";
 import { readApiJson, SeedingBreadcrumb } from "../../shared";
 
 export function GroupWorkspace({ hubId, groupId }: { hubId: string; groupId: string }) {
@@ -43,8 +42,7 @@ export function GroupWorkspace({ hubId, groupId }: { hubId: string; groupId: str
         hub={hub ? { id: hub.id, title: hub.title } : { id: hubId, title: "..." }}
         group={{ title: groupLoading ? "..." : group?.title ?? "Group" }}
       />
-      <MembersPanel groupId={groupId} />
-      <GroupContentWorkspace groupId={groupId} />
+      <GroupOpsTabs groupId={groupId} />
     </div>
   );
 }

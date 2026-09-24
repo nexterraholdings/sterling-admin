@@ -58,6 +58,8 @@ function initials(row: ModeratorRow) {
 export default function ModeratorsPage() {
   const [rows, setRows] = useState<ModeratorRow[]>([]);
   const [canManage, setCanManage] = useState(false);
+  const [actorId, setActorId] = useState<string | null>(null);
+  const [actorRole, setActorRole] = useState<AdminRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -83,6 +85,8 @@ export default function ModeratorsPage() {
       const data = await fetchModerators();
       setRows(data.rows);
       setCanManage(data.canManage);
+      setActorId(data.actorId);
+      setActorRole(data.actorRole);
     } catch (err) {
       setListError(err instanceof Error ? err.message : "Failed to load moderators");
     } finally {
@@ -154,6 +158,16 @@ export default function ModeratorsPage() {
 
   async function confirmRemove() {
     if (!pendingRemove) return;
+    if (pendingRemove.userId === actorId) {
+      setToast("You cannot remove your own access");
+      setPendingRemove(null);
+      return;
+    }
+    if (pendingRemove.role === "owner" && actorRole !== "owner") {
+      setToast("Only an owner can remove an owner");
+      setPendingRemove(null);
+      return;
+    }
     const userId = pendingRemove.userId;
     setSavingId(userId);
     try {
@@ -178,14 +192,8 @@ export default function ModeratorsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-zinc-50">Moderators</h2>
-          <p className="mt-1 max-w-xl text-sm text-zinc-500">
-            People who can sign in to this console. App roles on a user profile do not grant access.
-          </p>
-        </div>
-        {canManage && (
+      {canManage && (
+        <div className="flex justify-end">
           <Button
             onClick={() => {
               resetAddForm();
@@ -194,8 +202,8 @@ export default function ModeratorsPage() {
           >
             Add moderator
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900 shadow-sm">
         <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
@@ -239,6 +247,9 @@ export default function ModeratorsPage() {
                     : rows.map((row) => {
                         const disabled = Boolean(row.disabledAt);
                         const busy = savingId === row.userId;
+                        const isSelf = row.userId === actorId;
+                        const canEditRow =
+                          canManage && !isSelf && (row.role !== "owner" || actorRole === "owner");
                         return (
                           <tr key={row.userId} className={disabled ? "opacity-50" : ""}>
                             <td className="px-6 py-4">
@@ -256,7 +267,7 @@ export default function ModeratorsPage() {
                             </td>
                             <td className="px-6 py-4 text-zinc-400">{row.email ?? "—"}</td>
                             <td className="px-6 py-4">
-                              {canManage ? (
+                              {canEditRow ? (
                                 <Select
                                   value={row.role}
                                   disabled={busy}
@@ -291,6 +302,7 @@ export default function ModeratorsPage() {
                             </td>
                             {canManage && (
                               <td className="px-6 py-4">
+                                {canEditRow ? (
                                 <div className="flex justify-end gap-2">
                                   <Button
                                     type="button"
@@ -311,6 +323,7 @@ export default function ModeratorsPage() {
                                     Remove
                                   </Button>
                                 </div>
+                                ) : null}
                               </td>
                             )}
                           </tr>

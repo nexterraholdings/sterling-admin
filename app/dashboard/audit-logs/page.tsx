@@ -189,13 +189,6 @@ export default function AuditLogsPage() {
   return (
     <div className="space-y-6">
       <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">
-          Audit logs
-        </p>
-        <h2 className="mt-2 text-2xl font-semibold text-zinc-50">Administrative history</h2>
-      </div>
-
-      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <Tabs
             tabs={TABS.map((t) => ({

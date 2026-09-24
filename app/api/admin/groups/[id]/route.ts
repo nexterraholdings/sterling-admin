@@ -34,6 +34,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const hasDescription = formData.has("description");
   const hasCategories = formData.has("categories");
   const hasVisibility = formData.has("visibility");
+  const hasGuidelines = formData.has("guidelines");
   const hubId = String(formData.get("hubId") ?? "").trim() || undefined;
   const clearAvatar = String(formData.get("clearAvatar") ?? "") === "1";
 
@@ -52,6 +53,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
         ? formData.getAll("categories").map((v) => String(v)).filter(Boolean)
         : undefined,
       visibility: hasVisibility ? String(formData.get("visibility") ?? "") : undefined,
+      guidelines: hasGuidelines ? String(formData.get("guidelines") ?? "") : undefined,
       avatar,
       clearAvatar,
     });

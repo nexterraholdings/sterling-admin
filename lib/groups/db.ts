@@ -5,6 +5,8 @@ import { mapSeededHubRpcError } from "@/lib/seeded-hubs/types";
 import {
   GROUP_CATEGORY_LABELS,
   GROUP_VISIBILITY_VALUES,
+  coerceGroupGuidelines,
+  parseGroupGuidelines,
   type AdminGroupContentItem,
   type AdminGroupHub,
   type AdminGroupListItem,
@@ -14,9 +16,10 @@ import {
   type MovedGroupResult,
 } from "@/lib/groups/types";
 import { isPropAccountEmail, SYSTEM_GROUP_OWNER_EMAIL } from "@/lib/prop-accounts";
+import { clearPropFolderAssignment } from "@/lib/groups/propFolders";
 
 const GROUP_SELECT =
-  "id,discussion_id,creator_id,title,description,category,categories,avatar_url,visibility,archived_at,created_at,updated_at";
+  "id,discussion_id,creator_id,title,description,category,categories,avatar_url,visibility,archived_at,created_at,updated_at,guidelines";
 const GROUP_CORE_SELECT =
   "id,discussion_id,creator_id,title,description,archived_at,created_at";
 
@@ -384,6 +387,7 @@ function toListItem(
     hub,
     creator,
     is_system_owned: Boolean(systemOwnerId) && creatorId === systemOwnerId,
+    guidelines: coerceGroupGuidelines(row.guidelines),
   };
 }
 
@@ -818,6 +822,7 @@ export async function removeGroupMember(groupId: string, userId: string): Promis
     .eq("group_id", groupId)
     .eq("user_id", userId);
   if (error) throwDbError(error, "Failed to remove member");
+  await clearPropFolderAssignment(groupId, userId);
 }
 
 export async function deleteGroupContent(groupId: string, commentId: string): Promise<void> {
@@ -894,6 +899,7 @@ export type CreateSystemGroupInput = {
   categories?: string[];
   visibility?: string;
   avatar?: SystemGroupAvatarInput;
+  guidelines?: string;
 };
 
 /** Creates a group owned by the Sterling system account (no real user), always
@@ -927,6 +933,7 @@ export async function createSystemGroup(input: CreateSystemGroupInput): Promise<
       category: categories[0],
       categories,
       visibility,
+      guidelines: parseGroupGuidelines(input.guidelines ?? ""),
     })
     .select("id")
     .single();
@@ -956,6 +963,7 @@ export type UpdateSystemGroupInput = {
   visibility?: string;
   avatar?: SystemGroupAvatarInput;
   clearAvatar?: boolean;
+  guidelines?: string;
 };
 
 /** Full edit for a Sterling-owned group: title, description, categories,
@@ -995,6 +1003,9 @@ export async function updateSystemGroup(
   }
   if (input.visibility !== undefined) {
     updates.visibility = sanitizeVisibility(input.visibility);
+  }
+  if (input.guidelines !== undefined) {
+    updates.guidelines = parseGroupGuidelines(input.guidelines);
   }
 
   if (input.clearAvatar) {

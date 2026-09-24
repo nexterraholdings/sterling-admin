@@ -30,6 +30,8 @@ as $function$
 declare
   v_id uuid;
   v_parent_id uuid;
+  v_target_parent_id uuid;
+  v_grandparent_id uuid;
 begin
   if p_author_id is null then
     raise exception 'author_required';
@@ -50,22 +52,28 @@ begin
     raise exception 'discussion_group_hub_mismatch';
   end if;
 
-  -- The app only ever threads one level deep: CommentRow always attaches a
-  -- reply-to-a-reply to the top-level comment (threadParentId = comment.id in
-  -- SterlingMobile), never to the reply itself. A comment whose parent is
-  -- itself a reply is never fetched by the app's reply queries (which only
-  -- look up children of a top-level id), so it'd be seeded invisibly. Resolve
-  -- p_parent_id up to its top-level ancestor here so seeded replies land
-  -- exactly where the app would put them.
+  -- Thread shape matches the app's post screen:
+  --   post (parent null) → comment (child of the post) → reply (child of the comment).
+  -- CommentRow only expands replies under a comment, and a reply-to-a-reply
+  -- uses that comment as threadParentId. Walking a comment up to the post
+  -- stores the new row as another comment on the post.
   if p_parent_id is not null then
-    select coalesce(c.parent_id, c.id) into v_parent_id
+    select c.parent_id, parent.parent_id
+      into v_target_parent_id, v_grandparent_id
     from public.area_discussion_comments c
+    left join public.area_discussion_comments parent on parent.id = c.parent_id
     where c.id = p_parent_id
       and c.discussion_id = p_discussion_id
       and c.group_id is not distinct from p_group_id;
 
-    if v_parent_id is null then
+    if not found then
       raise exception 'parent_not_found';
+    end if;
+
+    if v_grandparent_id is not null then
+      v_parent_id := v_target_parent_id;
+    else
+      v_parent_id := p_parent_id;
     end if;
   else
     v_parent_id := null;
@@ -86,29 +94,3 @@ $function$;
 
 revoke all on function public.admin_create_area_discussion_comment(uuid, uuid, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.admin_create_area_discussion_comment(uuid, uuid, uuid, text, uuid) to service_role;
-
--- One-off cleanup: re-parent any comments seeded before this fix whose
--- parent is itself a reply (grandchildren, great-grandchildren, ...), so
--- they surface in the app instead of sitting invisibly under a reply the
--- app never queries into. Walks each comment's ancestor chain all the way
--- to its top-level root in one pass, however deep the old chain went.
-with recursive ancestry as (
-  select c.id, c.parent_id as root_id
-  from public.area_discussion_comments c
-  where c.parent_id is not null
-  union all
-  select a.id, p.parent_id
-  from ancestry a
-  join public.area_discussion_comments p on p.id = a.root_id
-  where p.parent_id is not null
-)
-update public.area_discussion_comments as target
-set parent_id = resolved.root_id
-from (
-  select a.id, a.root_id
-  from ancestry a
-  join public.area_discussion_comments r on r.id = a.root_id
-  where r.parent_id is null
-) as resolved
-where target.id = resolved.id
-  and target.parent_id is distinct from resolved.root_id;

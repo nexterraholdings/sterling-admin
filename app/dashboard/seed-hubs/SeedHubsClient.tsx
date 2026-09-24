@@ -980,10 +980,14 @@ function HubEditForm({
   );
 }
 
+type HubListFilter = "all" | "store" | "hidden";
+
 function ManageHubsTab({ initialSelectedId }: { initialSelectedId?: string }) {
   const [hubs, setHubs] = useState<SeededHubListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [visibility, setVisibility] = useState<HubListFilter>("all");
   const [selectedId, setSelectedId] = useState<string>("");
 
   const load = useCallback(async () => {
@@ -1013,11 +1017,17 @@ function ManageHubsTab({ initialSelectedId }: { initialSelectedId?: string }) {
     }
   }, [initialSelectedId, hubs]);
 
+  const filtering = search.trim().length > 0 || visibility !== "all";
+
   const visibleHubs = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return hubs;
-    return hubs.filter((hub) => `${hub.title} ${hub.location_hint ?? ""}`.toLowerCase().includes(q));
-  }, [hubs, search]);
+    return hubs.filter((hub) => {
+      if (visibility === "store" && !hub.seeded_visible) return false;
+      if (visibility === "hidden" && hub.seeded_visible) return false;
+      if (!q) return true;
+      return `${hub.title} ${hub.location_hint ?? ""}`.toLowerCase().includes(q);
+    });
+  }, [hubs, search, visibility]);
 
   const selectedHub = hubs.find((h) => h.id === selectedId) ?? null;
 
@@ -1033,12 +1043,54 @@ function ManageHubsTab({ initialSelectedId }: { initialSelectedId?: string }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[20rem_1fr]">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-3">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Filter planted hubs…"
-          className={inputCls}
-        />
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-zinc-200">
+            {visibleHubs.length} hub{visibleHubs.length === 1 ? "" : "s"}
+          </p>
+          <button
+            type="button"
+            onClick={() => setFilterOpen((open) => !open)}
+            className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+              filterOpen || filtering
+                ? "bg-emerald-500/15 text-emerald-100 ring-1 ring-emerald-500/40"
+                : "border border-zinc-800 text-zinc-300 hover:bg-zinc-800"
+            }`}
+          >
+            Filter
+          </button>
+        </div>
+        {filterOpen && (
+          <div className="mt-3 space-y-2">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Name or place"
+              className={inputCls}
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  ["all", "All"],
+                  ["store", "On store"],
+                  ["hidden", "Hidden"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setVisibility(id)}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 transition ${
+                    visibility === id
+                      ? "bg-emerald-500/20 text-emerald-100 ring-emerald-500/40"
+                      : "bg-zinc-950 text-zinc-400 ring-zinc-800 hover:text-zinc-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="mt-3 max-h-[36rem] space-y-1 overflow-y-auto">
           {loading ? (
             <p className="py-8 text-center text-sm text-zinc-500">Loading…</p>
@@ -1107,26 +1159,17 @@ export function SeedHubsClient() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-400">Coverage</p>
-        <h2 className="mt-2 text-2xl font-semibold text-zinc-50">Seed hubs</h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-          Plant city hubs in bulk around the world, browse them on a map, or edit the coverage, name, and visibility of hubs already planted.
-        </p>
-        <div className="mt-5 border-t border-zinc-800 pt-5">
-          <Tabs
-            key={tab}
-            tabs={[
-              { id: "plant", label: "Bulk plant", color: "emerald" },
-              { id: "map", label: "Map", color: "violet" },
-              { id: "manage", label: "Manage hubs", color: "blue" },
-            ]}
-            defaultTab={tab}
-            variant="segmented"
-            onChange={(id) => setTab(id as SeedHubsTab)}
-          />
-        </div>
-      </div>
+      <Tabs
+        key={tab}
+        tabs={[
+          { id: "plant", label: "Bulk plant", color: "emerald" },
+          { id: "map", label: "Map", color: "violet" },
+          { id: "manage", label: "Manage hubs", color: "blue" },
+        ]}
+        defaultTab={tab}
+        variant="segmented"
+        onChange={(id) => setTab(id as SeedHubsTab)}
+      />
 
       {tab === "plant" && <BulkPlantTab onPlanted={() => setRefreshNonce((n) => n + 1)} />}
       {tab === "map" && <MapTab onOpenInManageTab={goManageHub} />}

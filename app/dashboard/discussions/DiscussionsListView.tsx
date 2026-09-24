@@ -6,20 +6,14 @@ import type { DiscussionListItem } from "@/lib/discussions/types";
 import {
   Avatar,
   EmptyState,
-  FilterChip,
   FilterField,
   filterInputProps,
   formatRelativeTime,
-  LifecyclePill,
   LoadMoreBar,
   personLabel,
   ReportsBadge,
   SectionCard,
 } from "./discussionUi";
-import {
-  ADMIN_DISCUSSION_LIFECYCLE_FILTER_OPTIONS,
-  normalizeLifecycleFilterParam,
-} from "@/lib/discussions/lifecycle";
 
 const PAGE_SIZE = 20;
 
@@ -48,18 +42,19 @@ function CardSkeleton() {
   );
 }
 
-function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly: boolean }) {
+function DiscussionCard({ d }: { d: DiscussionListItem }) {
   return (
     <Link
       href={`/dashboard/discussions/${d.id}`}
       className="group block rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-sm transition hover:border-emerald-500/30 hover:bg-zinc-900/80 hover:shadow-md hover:shadow-emerald-500/5"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <LifecyclePill status={d.lifecycle_status ?? "active"} />
-        {(flaggedOnly || d.report_count > 0) && <ReportsBadge count={d.report_count} />}
-      </div>
+      {d.report_count > 0 && (
+        <div className="mb-3">
+          <ReportsBadge count={d.report_count} />
+        </div>
+      )}
 
-      <h3 className="mt-3 text-lg font-semibold leading-snug text-zinc-50 group-hover:text-emerald-100">
+      <h3 className="text-lg font-semibold leading-snug text-zinc-50 group-hover:text-emerald-100">
         {d.title}
       </h3>
 
@@ -99,20 +94,13 @@ function DiscussionCard({ d, flaggedOnly }: { d: DiscussionListItem; flaggedOnly
   );
 }
 
-function DiscussionTable({
-  discussions,
-  flaggedOnly,
-}: {
-  discussions: DiscussionListItem[];
-  flaggedOnly: boolean;
-}) {
+function DiscussionTable({ discussions }: { discussions: DiscussionListItem[] }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-zinc-800 bg-zinc-950">
       <table className="min-w-full text-left text-sm">
         <thead className="border-b border-zinc-800 bg-zinc-900/80 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
           <tr>
             <th className="px-4 py-3">Discussion</th>
-            <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Creator</th>
             <th className="px-4 py-3">Location</th>
             <th className="px-4 py-3 text-right">Comments</th>
@@ -126,12 +114,11 @@ function DiscussionTable({
                 <Link href={`/dashboard/discussions/${d.id}`} className="font-semibold text-zinc-100 hover:text-emerald-300">
                   {d.title}
                 </Link>
-              </td>
-              <td className="px-4 py-3">
-                <div className="flex flex-wrap gap-1">
-                  <LifecyclePill status={d.lifecycle_status ?? "active"} />
-                  {(flaggedOnly || d.report_count > 0) && <ReportsBadge count={d.report_count} />}
-                </div>
+                {d.report_count > 0 && (
+                  <div className="mt-1">
+                    <ReportsBadge count={d.report_count} />
+                  </div>
+                )}
               </td>
               <td className="px-4 py-3 text-zinc-400">{personLabel(d.creator)}</td>
               <td className="max-w-[8rem] truncate px-4 py-3 text-zinc-500">{d.location_hint ?? "—"}</td>
@@ -147,13 +134,12 @@ function DiscussionTable({
   );
 }
 
-export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
+export function DiscussionsListView() {
   const [search, setSearch] = useState("");
   const [city, setCity] = useState("");
   const [creatorSearch, setCreatorSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [lifecycleStatus, setLifecycleStatus] = useState("");
   const [sort, setSort] = useState("-created_at");
   const [page, setPage] = useState(1);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -184,11 +170,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     if (creatorSearch.trim()) params.set("creator", creatorSearch.trim());
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
-    if (lifecycleStatus) {
-      const normalized = normalizeLifecycleFilterParam(lifecycleStatus);
-      if (normalized) params.set("lifecycleStatus", normalized);
-    }
-    if (flaggedOnly) params.set("minReports", "1");
 
     fetch(`/api/admin/discussions?${params.toString()}`)
       .then(async (res) => {
@@ -216,11 +197,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
         setLoading(false);
         setLoadingMore(false);
       });
-  }, [search, city, creatorSearch, dateFrom, dateTo, lifecycleStatus, flaggedOnly, sort, page]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [flaggedOnly]);
+  }, [search, city, creatorSearch, dateFrom, dateTo, sort, page]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -235,8 +212,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     city.trim() ||
     creatorSearch.trim() ||
     dateFrom ||
-    dateTo ||
-    lifecycleStatus
+    dateTo
   );
 
   function clearFilters() {
@@ -245,12 +221,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     setCreatorSearch("");
     setDateFrom("");
     setDateTo("");
-    setLifecycleStatus("");
-    setPage(1);
-  }
-
-  function applyLifecycleQuick(status: string) {
-    setLifecycleStatus((prev) => (prev === status ? "" : status));
     setPage(1);
   }
 
@@ -265,7 +235,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
     <div className="space-y-5">
       <SectionCard
         title="Find hubs"
-        description="Search by title, then narrow with quick filters. Open any card for lifecycle controls, hub content, and moderation."
+        description="Search by title, then narrow by creator, place, or date."
       >
         <FilterField label="Search by title">
           <input
@@ -280,31 +250,15 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
           />
         </FilterField>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <FilterChip active={lifecycleStatus === "bootstrap"} onClick={() => applyLifecycleQuick("bootstrap")} tone="violet">
-            Starting up
-          </FilterChip>
-          <FilterChip active={lifecycleStatus === "active"} onClick={() => applyLifecycleQuick("active")} tone="emerald">
-            Live
-          </FilterChip>
-          <FilterChip active={lifecycleStatus === "grace"} onClick={() => applyLifecycleQuick("grace")}>
-            At risk
-          </FilterChip>
-          <FilterChip
-            active={lifecycleStatus === "claimable" || lifecycleStatus === "auction"}
-            onClick={() => applyLifecycleQuick("claimable")}
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="mt-3 text-xs font-semibold text-zinc-400 hover:text-zinc-200"
           >
-            Claimable
-          </FilterChip>
-          <FilterChip active={lifecycleStatus === "expired"} onClick={() => applyLifecycleQuick("expired")}>
-            Ended
-          </FilterChip>
-          {hasActiveFilters && (
-            <FilterChip active={false} onClick={clearFilters}>
-              Clear all
-            </FilterChip>
-          )}
-        </div>
+            Clear filters
+          </button>
+        )}
 
         <button
           type="button"
@@ -332,17 +286,6 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
                 placeholder="e.g. Austin"
               />
             </FilterField>
-            <FilterField label="Lifecycle">
-              <select
-                {...filterInputProps()}
-                value={lifecycleStatus}
-                onChange={(e) => { setLifecycleStatus(e.target.value); setPage(1); }}
-              >
-                {ADMIN_DISCUSSION_LIFECYCLE_FILTER_OPTIONS.map((o) => (
-                  <option key={o.value || "all"} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </FilterField>
             <FilterField label="Created from">
               <input
                 type="date"
@@ -368,7 +311,7 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
           {loading ? "Loading…" : (
             <>
               <span className="font-semibold text-zinc-200">{total}</span>
-              {flaggedOnly ? " flagged" : ""} discussion{total !== 1 ? "s" : ""}
+              {" "}hub{total !== 1 ? "s" : ""}
             </>
           )}
         </p>
@@ -412,12 +355,8 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
         <div className="rounded-xl bg-rose-500/15 px-4 py-3 text-sm text-rose-300">{error}</div>
       ) : discussions.length === 0 ? (
         <EmptyState
-          title={flaggedOnly ? "Nothing in the moderation queue" : "No hubs match"}
-          hint={
-            flaggedOnly
-              ? "When users report area hubs, they appear here."
-              : "Try clearing filters or searching with a shorter keyword."
-          }
+          title="No hubs match"
+          hint="Try clearing filters or searching with a shorter keyword."
           action={
             hasActiveFilters ? (
               <button type="button" onClick={clearFilters} className="text-sm font-semibold text-emerald-400">
@@ -431,11 +370,11 @@ export function DiscussionsListView({ flaggedOnly }: { flaggedOnly: boolean }) {
           {viewMode === "cards" ? (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {discussions.map((d) => (
-                <DiscussionCard key={d.id} d={d} flaggedOnly={flaggedOnly} />
+                <DiscussionCard key={d.id} d={d} />
               ))}
             </div>
           ) : (
-            <DiscussionTable discussions={discussions} flaggedOnly={flaggedOnly} />
+            <DiscussionTable discussions={discussions} />
           )}
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900">
             <LoadMoreBar

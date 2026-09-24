@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { AdminGroupListItem, GroupVisibility } from "@/lib/groups/types";
-import { GROUP_CATEGORY_LABELS, GROUP_VISIBILITY_LABELS, GROUP_VISIBILITY_VALUES, groupCategoryLabel } from "@/lib/groups/types";
+import { GROUP_CATEGORY_LABELS, GROUP_GUIDELINES_MAX_CHARS, GROUP_VISIBILITY_LABELS, GROUP_VISIBILITY_VALUES, groupCategoryLabel } from "@/lib/groups/types";
 import type { SeededHubListItem, SeededPlaceKind } from "@/lib/seeded-hubs/types";
 
 const PAGE_SIZE = 20;
@@ -97,6 +97,7 @@ export function GroupsClient() {
   const [editingGroup, setEditingGroup] = useState<AdminGroupListItem | null>(null);
   const [formTitle, setFormTitle] = useState("");
   const [formDescription, setFormDescription] = useState("");
+  const [formGuidelines, setFormGuidelines] = useState("");
   const [formCategories, setFormCategories] = useState<string[]>(["other"]);
   const [formVisibility, setFormVisibility] = useState<GroupVisibility>("public");
   const [formHubId, setFormHubId] = useState("");
@@ -188,6 +189,7 @@ export function GroupsClient() {
   function resetGroupForm() {
     setFormTitle("");
     setFormDescription("");
+    setFormGuidelines("");
     setFormCategories(["other"]);
     setFormVisibility("public");
     setFormHubId("");
@@ -210,6 +212,7 @@ export function GroupsClient() {
     setEditingGroup(group);
     setFormTitle(group.title);
     setFormDescription(group.description ?? "");
+    setFormGuidelines(group.guidelines ?? "");
     setFormCategories(group.categories.length ? group.categories : ["other"]);
     setFormVisibility((group.visibility as GroupVisibility) || "public");
     setFormHubId(group.discussion_id);
@@ -263,6 +266,7 @@ export function GroupsClient() {
     formData.set("title", title);
     formData.set("description", formDescription.trim());
     formData.set("visibility", formVisibility);
+    formData.append("guidelines", formGuidelines);
     for (const category of formCategories) formData.append("categories", category);
     if (formAvatarFile) formData.set("avatar", formAvatarFile);
     if (formClearAvatar) formData.set("clearAvatar", "1");
@@ -300,15 +304,7 @@ export function GroupsClient() {
       )}
 
       <div className="shrink-0 border-b border-zinc-800 bg-zinc-900/80 px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400">Content</p>
-            <h1 className="mt-1 text-lg font-semibold text-zinc-50">Groups</h1>
-            <p className="mt-0.5 max-w-2xl text-xs text-zinc-500">
-              Browse groups, then open one to attach photos, add existing prop accounts in bulk, or generate new ones.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
             <div className="hidden items-center gap-2 sm:flex">
               <Metric label="Groups" value={loading && page === 1 ? "…" : String(total)} />
               <Metric label="Hubs" value={String(seededHubs.length)} />
@@ -322,12 +318,11 @@ export function GroupsClient() {
               New Sterling group
             </button>
             <Link
-              href="/dashboard/seed-hubs"
+              href="/dashboard/discussions/seed"
               className="rounded-xl border border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
             >
               Convert pins
             </Link>
-          </div>
         </div>
       </div>
 
@@ -644,6 +639,19 @@ export function GroupsClient() {
                 maxLength={240}
                 className={`${inputCls} min-h-[64px] resize-y`}
                 placeholder="What's this group about?"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Guidelines
+              </label>
+              <textarea
+                value={formGuidelines}
+                onChange={(e) => setFormGuidelines(e.target.value)}
+                maxLength={GROUP_GUIDELINES_MAX_CHARS}
+                className={`${inputCls} min-h-[96px] resize-y`}
+                placeholder="Shown in the app before people join."
               />
             </div>
 

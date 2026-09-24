@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import type { AuthUserRow, UserDeleteTarget, UserProfile } from "@/lib/types";
 import { Tabs } from "@/components/dashboard/Tabs";
 import { Pagination } from "@/components/ui/Pagination";
+import { FilterChip, formatRelativeTime } from "@/components/admin/ui";
 import { banUser, type BanType } from "@/app/dashboard/banned-users/actions";
 import { strikeUser } from "@/app/dashboard/moderation/actions";
 import {
@@ -15,6 +16,7 @@ import {
   deleteUserByTarget,
   deleteUsersByTarget,
   type FetchFilter,
+  type FetchSort,
 } from "@/app/dashboard/users/actions";
 import {
   fetchUserDevices,
@@ -50,6 +52,35 @@ function actionErrorMessage(error: unknown): string {
 
 const ACCOUNT_ROLES = ["user", "moderator", "admin", "owner"];
 const USER_ROLES = ["member", "creator", "moderator", "admin", "support", "owner"];
+
+const SORT_OPTIONS: { value: FetchSort; label: string }[] = [
+  { value: "newest", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
+  { value: "name", label: "Name A → Z" },
+];
+
+type RecencyFilter = "any" | "7d" | "30d";
+
+function recencySince(recency: RecencyFilter): string | undefined {
+  if (recency === "any") return undefined;
+  const days = recency === "7d" ? 7 : 30;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function formatPreferenceLabel(value: string): string {
+  return value.replace(/[_-]+/g, " ").trim();
+}
+
+function preferenceLabels(user: UserProfile): string[] {
+  const rawGoals = Array.isArray(user.main_goals) ? user.main_goals : [];
+  const goals = rawGoals.map((goal) => String(goal).trim()).filter(Boolean);
+  if (goals.length > 0) return goals;
+  const role = user.role?.trim();
+  if (role && !USER_ROLES.includes(role) && !ACCOUNT_ROLES.includes(role)) {
+    return [role];
+  }
+  return [];
+}
 
 const ACCOUNT_ROLE_BADGE: Record<string, string> = {
   owner: "bg-violet-500/15 text-violet-300",
@@ -797,6 +828,23 @@ function EditUserPanel({
                 <p className="mt-1.5 text-xs text-rose-400">{strikeError}</p>
               )}
             </Field>
+            <Field label="Preference">
+              {preferenceLabels(profile).length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {preferenceLabels(profile).map((goal) => (
+                    <span
+                      key={goal}
+                      className="rounded-full bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300"
+                    >
+                      {formatPreferenceLabel(goal)}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className={readOnlyCls}>—</p>
+              )}
+              <p className="text-xs text-zinc-500">Collected during onboarding (what they are here for).</p>
+            </Field>
             <Field label="Bio">
               <textarea
                 rows={4}
@@ -1059,9 +1107,10 @@ function UserRow({
             <p className="font-medium text-zinc-50">
               {user.full_name ?? user.username ?? "—"}
             </p>
-            {user.username && (
-              <p className="mt-0.5 text-xs text-zinc-500">@{user.username}</p>
-            )}
+            <p className="mt-0.5 text-xs text-zinc-500">
+              {user.username ? `@${user.username} · ` : ""}
+              Joined {formatRelativeTime(user.created_at)}
+            </p>
           </div>
         </div>
       </td>
@@ -1075,16 +1124,20 @@ function UserRow({
         </span>
       </td>
       <td className="px-6 py-4 text-zinc-400">
-        <div className="flex flex-wrap gap-2">
-          {user.operating_markets.map((market) => (
-            <span
-              key={market}
-              className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400"
-            >
-              {market}
-            </span>
-          ))}
-        </div>
+        {preferenceLabels(user).length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {preferenceLabels(user).map((goal) => (
+              <span
+                key={goal}
+                className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-300"
+              >
+                {formatPreferenceLabel(goal)}
+              </span>
+            ))}
+          </div>
+        ) : (
+          "—"
+        )}
       </td>
       <td className="px-6 py-4">
         <span
@@ -1151,7 +1204,7 @@ function UserRowSkeleton() {
   );
 }
 
-const TABLE_HEADERS = ["User", "Email", "Auth", "Role", "Markets", "Access", "Strikes", ""];
+const TABLE_HEADERS = ["User", "Email", "Auth", "Role", "Preference", "Access", "Strikes", ""];
 
 function TableHead({
   allSelected,
@@ -1740,12 +1793,18 @@ function AuthUsersTable({
 function UsersTable({
   accountRole,
   flagged,
+  seeded,
   search,
+  sort,
+  recency,
   emptyMessage = "No users found",
 }: {
   accountRole?: string;
   flagged?: boolean;
+  seeded?: boolean;
   search: string;
+  sort: FetchSort;
+  recency: RecencyFilter;
   emptyMessage?: string;
 }) {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -1759,7 +1818,12 @@ function UsersTable({
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const filter: FetchFilter = { account_role: accountRole, flagged };
+  const filter: FetchFilter = {
+    account_role: accountRole,
+    flagged,
+    seeded,
+    createdSince: recencySince(recency),
+  };
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const allSelected = users.length > 0 && users.every((u) => selectedIds.has(u.id));
   const someSelected = users.some((u) => selectedIds.has(u.id));
@@ -1784,7 +1848,7 @@ function UsersTable({
     setCurrentPage(1);
     setSelectedIds(new Set());
 
-    fetchProfiles(1, filter, search)
+    fetchProfiles(1, filter, search, sort)
       .then(async ({ profiles, totalCount }) => {
         const withAuth = await attachAuthPresence(profiles);
         setUsers(withAuth);
@@ -1794,13 +1858,13 @@ function UsersTable({
         setLoadError(err instanceof Error ? err.message : "Failed to load users")
       )
       .finally(() => setLoading(false));
-  }, [accountRole, flagged, search]);
+  }, [accountRole, flagged, seeded, search, sort, recency]);
 
   function goToPage(page: number) {
     setLoading(true);
     setLoadError(null);
     setSelectedIds(new Set());
-    fetchProfiles(page, filter, search)
+    fetchProfiles(page, filter, search, sort)
       .then(async ({ profiles, totalCount }) => {
         const withAuth = await attachAuthPresence(profiles);
         setUsers(withAuth);
@@ -1991,6 +2055,8 @@ export function UserManagementView() {
   const [activeTab, setActiveTab] = useState("all");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [sort, setSort] = useState<FetchSort>("newest");
+  const [recency, setRecency] = useState<RecencyFilter>("any");
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -2001,44 +2067,77 @@ export function UserManagementView() {
     activeTab === "auth"
       ? "Search auth users by email, phone, id, or profile name…"
       : "Search by name, email, or username…";
+  const showProfileFilters = activeTab !== "auth";
 
   return (
     <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
       {/* Search */}
-      <div className="relative">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 20 20"
-          fill="currentColor"
-          className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500"
-        >
-          <path
-            fillRule="evenodd"
-            d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
-            clipRule="evenodd"
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500"
+          >
+            <path
+              fillRule="evenodd"
+              d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={searchPlaceholder}
+            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-2.5 pl-10 pr-4 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-500 focus:border-zinc-500 focus:bg-zinc-900 focus:ring-2 focus:ring-zinc-700"
           />
-        </svg>
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={searchPlaceholder}
-          className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-2.5 pl-10 pr-4 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-500 focus:border-zinc-500 focus:bg-zinc-900 focus:ring-2 focus:ring-zinc-700"
-        />
-        {search !== debouncedSearch && (
-          <span className="absolute right-3.5 top-1/2 -translate-y-1/2">
-            <svg
-              className="h-4 w-4 animate-spin text-zinc-500"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-            </svg>
-          </span>
+          {search !== debouncedSearch && (
+            <span className="absolute right-3.5 top-1/2 -translate-y-1/2">
+              <svg
+                className="h-4 w-4 animate-spin text-zinc-500"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+              </svg>
+            </span>
+          )}
+        </div>
+        {showProfileFilters && (
+          <select
+            className={`${selectCls} sm:w-44`}
+            value={sort}
+            onChange={(e) => setSort(e.target.value as FetchSort)}
+            aria-label="Sort users"
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         )}
       </div>
+      {showProfileFilters && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            Joined
+          </span>
+          <FilterChip active={recency === "any"} onClick={() => setRecency("any")}>
+            Any time
+          </FilterChip>
+          <FilterChip active={recency === "7d"} onClick={() => setRecency("7d")} tone="emerald">
+            Last 7 days
+          </FilterChip>
+          <FilterChip active={recency === "30d"} onClick={() => setRecency("30d")} tone="emerald">
+            Last 30 days
+          </FilterChip>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mt-5">
@@ -2049,6 +2148,7 @@ export function UserManagementView() {
             { id: "admins", label: "Admins", color: "rose" },
             { id: "moderators", label: "Moderators", color: "amber" },
             { id: "flagged", label: "Flagged", color: "rose" },
+            { id: "seeded", label: "Seeded", color: "emerald" },
           ]}
           defaultTab="all"
           variant="pills"
@@ -2060,7 +2160,7 @@ export function UserManagementView() {
       {/* Content */}
       <div className="mt-6">
         {activeTab === "all" && (
-          <UsersTable key="all" search={debouncedSearch} />
+          <UsersTable key="all" search={debouncedSearch} sort={sort} recency={recency} />
         )}
         {activeTab === "auth" && (
           <AuthUsersTable
@@ -2074,6 +2174,8 @@ export function UserManagementView() {
             key="admins"
             accountRole="admin"
             search={debouncedSearch}
+            sort={sort}
+            recency={recency}
             emptyMessage="No admin accounts found"
           />
         )}
@@ -2082,6 +2184,8 @@ export function UserManagementView() {
             key="moderators"
             accountRole="moderator"
             search={debouncedSearch}
+            sort={sort}
+            recency={recency}
             emptyMessage="No moderator accounts found"
           />
         )}
@@ -2090,7 +2194,19 @@ export function UserManagementView() {
             key="flagged"
             flagged
             search={debouncedSearch}
+            sort={sort}
+            recency={recency}
             emptyMessage="No flagged users"
+          />
+        )}
+        {activeTab === "seeded" && (
+          <UsersTable
+            key="seeded"
+            seeded
+            search={debouncedSearch}
+            sort={sort}
+            recency={recency}
+            emptyMessage="No seeded users"
           />
         )}
       </div>

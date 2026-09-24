@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
     .getAll("categories")
     .map((v) => String(v))
     .filter(Boolean);
+  const guidelines = String(formData.get("guidelines") ?? "");
 
   try {
     const avatar = await readAvatarField(formData);
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
       description,
       categories,
       visibility,
+      guidelines,
       avatar,
     });
     await logAdminAction({

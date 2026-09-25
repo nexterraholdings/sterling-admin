@@ -75,7 +75,7 @@ alter table public.prop_account_personas enable row level security;
 alter table public.prop_engagement_jobs enable row level security;
 alter table public.prop_groq_calls enable row level security;
 
--- The 10-minute worker is the pg_cron job prop-conversations-tick.
+-- The 2-minute worker is the pg_cron job prop-conversations-tick.
 -- It POSTs to https://admin.sterlingtheapp.com/api/cron/prop-conversations
 -- with a bearer token stored in vault as prop_conversations_cron_secret.
 -- That same value is CRON_SECRET on the Vercel projects.

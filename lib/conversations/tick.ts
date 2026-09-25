@@ -5,7 +5,7 @@ import { GROQ_MODEL, GroqCallError, personalityOrDefault, topicOrDefault, writeC
 import { minutesFromNow, startOfNyDay, withinActiveHours } from "@/lib/conversations/time";
 import { TOPIC_DIRECTIONS, type ConversationTickResult, type ManualRunRequest } from "@/lib/conversations/types";
 
-const MAX_CALLS_PER_TICK = 2;
+const MAX_CALLS_PER_TICK = 4;
 const STALE_MS = 2 * 60 * 60 * 1000;
 
 type MemberMap = Map<string, string[]>;

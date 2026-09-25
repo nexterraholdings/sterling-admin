@@ -659,7 +659,7 @@ function runIssueCount(run: ConversationActiveRun, settings: ConversationSetting
 function runIssues(run: ConversationActiveRun, settings: ConversationSettings, used: number, cap: number) {
   const waiting = run.waiting + run.running > 0;
   const overdue = run.lines.filter(
-    (line) => line.status === "pending" && new Date(line.runAt).getTime() < Date.now() - 15 * 60_000,
+    (line) => line.status === "pending" && new Date(line.runAt).getTime() < Date.now() - 10 * 60_000,
   ).length;
   return [
     ...(overdue > 0 && settings.enabled && used < cap
@@ -698,7 +698,8 @@ function splitRunTopic(topic: string): { subject: string; tone: string | null; n
 
 function minutesUntil(iso: string): string {
   const minutes = Math.round((new Date(iso).getTime() - Date.now()) / 60_000);
-  if (minutes <= 0) return "due now";
+  if (minutes <= 0 && minutes > -3) return "sending in the next check";
+  if (minutes <= 0) return `${-minutes} min late, sending in the next check`;
   if (minutes < 60) return `in ${minutes} min`;
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;

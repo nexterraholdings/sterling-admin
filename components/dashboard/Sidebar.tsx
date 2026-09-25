@@ -34,7 +34,9 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "Content",
     items: [
       { href: "/dashboard/discussions", label: "Hubs", short: "DS", description: "Area hubs, planting, and old pins" },
+      { href: "/dashboard/prop-accounts", label: "Prop accounts", short: "PA", description: "Folders and prop profiles" },
       { href: "/dashboard/groups", label: "Groups", short: "GR", description: "Seed groups with prop members and content" },
+      { href: "/dashboard/conversations", label: "Conversations", short: "CV", description: "AI prop posts and replies" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app messages" },
       { href: "/dashboard/blog", label: "Blog", short: "BL", description: "Company blog posts" },
     ],

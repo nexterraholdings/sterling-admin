@@ -2051,8 +2051,24 @@ function UsersTable({
 // View
 // ---------------------------------------------------------------------------
 
-export function UserManagementView() {
-  const [activeTab, setActiveTab] = useState("all");
+export function UserManagementView({ openUserId = null }: { openUserId?: string | null }) {
+  const [activeTab, setActiveTab] = useState(openUserId ? "seeded" : "all");
+  const [openedUser, setOpenedUser] = useState<UserProfile | null>(null);
+
+  useEffect(() => {
+    if (!openUserId) return;
+    let cancelled = false;
+    fetchProfileById(openUserId)
+      .then((profile) => {
+        if (!cancelled) setOpenedUser(profile);
+      })
+      .catch(() => {
+        if (!cancelled) setOpenedUser(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openUserId]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sort, setSort] = useState<FetchSort>("newest");
@@ -2071,6 +2087,15 @@ export function UserManagementView() {
 
   return (
     <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
+      {openedUser ? (
+        <EditUserPanel
+          key={openedUser.id}
+          user={openedUser}
+          onClose={() => setOpenedUser(null)}
+          onSaved={setOpenedUser}
+          onDeleted={() => setOpenedUser(null)}
+        />
+      ) : null}
       {/* Search */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">

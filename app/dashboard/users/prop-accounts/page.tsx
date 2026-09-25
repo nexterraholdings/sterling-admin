@@ -1,7 +1,5 @@
-import { listPropAccountDirectory } from "@/lib/groups/propFolders";
-import { PropAccountsView } from "./PropAccountsView";
+import { redirect } from "next/navigation";
 
-export default async function PropAccountsPage() {
-  const directory = await listPropAccountDirectory();
-  return <PropAccountsView directory={directory} />;
+export default function LegacyPropAccountsPage() {
+  redirect("/dashboard/prop-accounts");
 }

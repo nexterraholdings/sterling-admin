@@ -21,8 +21,7 @@ export type PropDirectoryAccount = {
 export type PropDirectoryFolder = {
   id: string;
   name: string;
-  groupId: string;
-  groupTitle: string;
+  parentId: string | null;
   userIds: string[];
 };
 
@@ -232,39 +231,26 @@ export async function listPropAccountDirectory(): Promise<PropAccountDirectory> 
     if (batch.length < pageSize) break;
   }
 
-  const folderRows: Array<{ id: string; name: string; group_id: string }> = [];
+  const folderRows: Array<{ id: string; name: string; parent_id: string | null }> = [];
   const memberRows: Array<{ folder_id: string; user_id: string }> = [];
   const { data: folders, error: folderError } = await supabaseAdmin
-    .from("admin_group_prop_folders")
-    .select("id,name,group_id")
+    .from("admin_prop_folders")
+    .select("id,name,parent_id")
     .order("name", { ascending: true })
     .limit(1000);
   if (folderError) {
     if (!isMissingSchemaError(folderError)) throwDbError(folderError, "Failed to load folders");
   } else {
-    folderRows.push(...((folders ?? []) as Array<{ id: string; name: string; group_id: string }>));
+    folderRows.push(...((folders ?? []) as Array<{ id: string; name: string; parent_id: string | null }>));
   }
 
   if (folderRows.length) {
     const { data: members, error: memberError } = await supabaseAdmin
-      .from("admin_group_prop_folder_members")
+      .from("admin_prop_folder_members")
       .select("folder_id,user_id")
       .limit(5000);
     if (memberError) throwDbError(memberError, "Failed to load folder members");
     memberRows.push(...((members ?? []) as Array<{ folder_id: string; user_id: string }>));
-  }
-
-  const groupIds = [...new Set(folderRows.map((row) => String(row.group_id)))];
-  const groupTitles = new Map<string, string>();
-  if (groupIds.length) {
-    const { data: groups, error: groupError } = await supabaseAdmin
-      .from("discussion_groups")
-      .select("id,title")
-      .in("id", groupIds);
-    if (groupError) throwDbError(groupError, "Failed to load groups");
-    for (const group of groups ?? []) {
-      groupTitles.set(String(group.id), String(group.title ?? "").trim() || "Untitled group");
-    }
   }
 
   const userIdsByFolder = new Map<string, string[]>();
@@ -293,11 +279,134 @@ export async function listPropAccountDirectory(): Promise<PropAccountDirectory> 
     folders: folderRows.map((row) => ({
       id: String(row.id),
       name: row.name,
-      groupId: String(row.group_id),
-      groupTitle: groupTitles.get(String(row.group_id)) ?? "Unknown group",
+      parentId: row.parent_id ? String(row.parent_id) : null,
       userIds: userIdsByFolder.get(String(row.id)) ?? [],
     })),
   };
+}
+
+function duplicateFolderName(error: { message?: string; code?: string } | null): boolean {
+  return error?.code === "23505" || (error?.message ?? "").toLowerCase().includes("duplicate");
+}
+
+export async function createUniversalPropFolder(rawName: string, parentId?: string | null): Promise<PropDirectoryFolder> {
+  const name = cleanName(rawName);
+  const parent = parentId || null;
+  if (parent) {
+    const { data: parentFolder, error: parentError } = await supabaseAdmin
+      .from("admin_prop_folders")
+      .select("id")
+      .eq("id", parent)
+      .maybeSingle();
+    if (parentError) throwDbError(parentError, "Failed to load folder");
+    if (!parentFolder) throw new Error("folder_not_found");
+  }
+  const { data, error } = await supabaseAdmin
+    .from("admin_prop_folders")
+    .insert({ name, parent_id: parent })
+    .select("id,name,parent_id")
+    .single();
+  if (error) {
+    if (duplicateFolderName(error)) throw new Error("A folder with that name already exists.");
+    throwDbError(error, "Failed to create folder");
+  }
+  return { id: String(data.id), name: data.name, parentId: data.parent_id ? String(data.parent_id) : null, userIds: [] };
+}
+
+export async function renameUniversalPropFolder(folderId: string, rawName: string): Promise<PropDirectoryFolder> {
+  const name = cleanName(rawName);
+  const { data, error } = await supabaseAdmin
+    .from("admin_prop_folders")
+    .update({ name })
+    .eq("id", folderId)
+    .select("id,name,parent_id")
+    .maybeSingle();
+  if (error) {
+    if (duplicateFolderName(error)) throw new Error("A folder with that name already exists.");
+    throwDbError(error, "Failed to rename folder");
+  }
+  if (!data) throw new Error("folder_not_found");
+  return { id: String(data.id), name: data.name, parentId: data.parent_id ? String(data.parent_id) : null, userIds: [] };
+}
+
+export async function deleteUniversalPropFolder(folderId: string): Promise<void> {
+  const { data: folder, error: folderError } = await supabaseAdmin
+    .from("admin_prop_folders")
+    .select("id,parent_id")
+    .eq("id", folderId)
+    .maybeSingle();
+  if (folderError) throwDbError(folderError, "Failed to load folder");
+  if (!folder) throw new Error("folder_not_found");
+
+  const { error: childError } = await supabaseAdmin
+    .from("admin_prop_folders")
+    .update({ parent_id: folder.parent_id })
+    .eq("parent_id", folderId);
+  if (childError) throwDbError(childError, "Failed to move folders out");
+
+  const { error } = await supabaseAdmin.from("admin_prop_folders").delete().eq("id", folderId);
+  if (error) throwDbError(error, "Failed to delete folder");
+}
+
+export async function moveUniversalPropFolder(folderId: string, parentId: string | null): Promise<void> {
+  const parent = parentId || null;
+  if (parent === folderId) throw new Error("A folder cannot be moved into itself.");
+
+  const { data: rows, error: listError } = await supabaseAdmin.from("admin_prop_folders").select("id,parent_id").limit(1000);
+  if (listError) throwDbError(listError, "Failed to load folders");
+  const parentById = new Map(
+    ((rows ?? []) as Array<{ id: string; parent_id: string | null }>).map((row) => [String(row.id), row.parent_id ? String(row.parent_id) : null]),
+  );
+  if (!parentById.has(folderId)) throw new Error("folder_not_found");
+  if (parent && !parentById.has(parent)) throw new Error("folder_not_found");
+
+  let cursor = parent;
+  while (cursor) {
+    if (cursor === folderId) throw new Error("A folder cannot be moved into one of its own folders.");
+    cursor = parentById.get(cursor) ?? null;
+  }
+
+  const { error } = await supabaseAdmin.from("admin_prop_folders").update({ parent_id: parent }).eq("id", folderId);
+  if (error) throwDbError(error, "Failed to move folder");
+}
+
+export async function assignUniversalPropFolder(userIds: string[], folderId: string | null): Promise<void> {
+  const unique = [...new Set(userIds.map((id) => id.trim()).filter(Boolean))];
+  if (unique.length === 0) throw new Error("Choose a prop account.");
+
+  const { data: profiles, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select("id,email")
+    .in("id", unique);
+  if (profileError) throwDbError(profileError, "Failed to check prop accounts");
+  const propIds = new Set(
+    ((profiles ?? []) as Array<{ id: string; email: string | null }>)
+      .filter((row) => isPropAccountEmail(row.email) && row.email !== SYSTEM_GROUP_OWNER_EMAIL)
+      .map((row) => String(row.id)),
+  );
+  if (unique.some((id) => !propIds.has(id))) {
+    throw new Error("Folders are only for prop accounts.");
+  }
+
+  if (!folderId) {
+    const { error } = await supabaseAdmin.from("admin_prop_folder_members").delete().in("user_id", unique);
+    if (error) throwDbError(error, "Failed to remove accounts from the folder");
+    return;
+  }
+
+  const { data: folder, error: folderError } = await supabaseAdmin
+    .from("admin_prop_folders")
+    .select("id")
+    .eq("id", folderId)
+    .maybeSingle();
+  if (folderError) throwDbError(folderError, "Failed to load folder");
+  if (!folder) throw new Error("folder_not_found");
+
+  const { error } = await supabaseAdmin.from("admin_prop_folder_members").upsert(
+    unique.map((userId) => ({ user_id: userId, folder_id: folderId })),
+    { onConflict: "user_id" },
+  );
+  if (error) throwDbError(error, "Failed to move accounts into the folder");
 }
 
 export async function clearPropFolderAssignment(groupId: string, userId: string): Promise<void> {

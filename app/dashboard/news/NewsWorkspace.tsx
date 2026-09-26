@@ -412,7 +412,7 @@ export function NewsWorkspace({
     <div className="fixed inset-0 z-[100] flex flex-col bg-zinc-950">
       {/* Header */}
       <header className="shrink-0 border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-[1600px] items-center gap-4 px-4 py-4 sm:px-6">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-3 px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
           <button
             type="button"
             onClick={onClose}
@@ -432,7 +432,7 @@ export function NewsWorkspace({
             <p className="mt-0.5 text-sm text-zinc-500">{formatDate(dateUtc)} · UTC</p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
             {isEditing ? (
               <>
                 <button

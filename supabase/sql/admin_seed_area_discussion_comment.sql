@@ -94,3 +94,34 @@ $function$;
 
 revoke all on function public.admin_create_area_discussion_comment(uuid, uuid, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.admin_create_area_discussion_comment(uuid, uuid, uuid, text, uuid) to service_role;
+
+create or replace function public.admin_update_area_discussion_comment(
+  p_comment_id uuid,
+  p_body text
+)
+returns void
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  if p_comment_id is null then
+    raise exception 'comment_required';
+  end if;
+  if btrim(coalesce(p_body, '')) = '' then
+    raise exception 'body_required';
+  end if;
+  if not exists (select 1 from public.area_discussion_comments where id = p_comment_id) then
+    raise exception 'comment_not_found';
+  end if;
+
+  perform set_config('app.discussion_feed_bypass_location', '1', true);
+
+  update public.area_discussion_comments
+  set body = btrim(p_body)
+  where id = p_comment_id;
+end;
+$function$;
+
+revoke all on function public.admin_update_area_discussion_comment(uuid, text) from public, anon, authenticated;
+grant execute on function public.admin_update_area_discussion_comment(uuid, text) to service_role;

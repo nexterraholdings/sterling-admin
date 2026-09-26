@@ -45,17 +45,17 @@ export function Pagination({
   const pageNumbers = getPageNumbers();
 
   return (
-    <div className="-mx-6 -mb-6 flex items-center justify-between border-t border-zinc-800 px-6 py-4">
+    <div className="flex flex-col gap-3 border-t border-zinc-800 px-1 py-4 sm:flex-row sm:items-center sm:justify-between">
       {totalItems !== undefined && pageSize !== undefined && (
         <span className="text-sm text-zinc-500">
           {totalItems} total
         </span>
       )}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <button
           onClick={() => onPageChange(currentPage - 1)}
           disabled={currentPage <= 1}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-sm text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30 sm:h-8 sm:w-8"
         >
           ◀
         </button>
@@ -69,7 +69,7 @@ export function Pagination({
             <button
               key={page}
               onClick={() => onPageChange(page)}
-              className={`flex h-8 min-w-[2rem] items-center justify-center rounded-lg px-2 text-sm font-medium transition ${
+              className={`flex h-11 min-w-11 items-center justify-center rounded-lg px-2 text-sm font-medium transition sm:h-8 sm:min-w-[2rem] ${
                 page === currentPage
                   ? "bg-white text-zinc-900 shadow-sm"
                   : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
@@ -83,7 +83,7 @@ export function Pagination({
         <button
           onClick={() => onPageChange(currentPage + 1)}
           disabled={currentPage >= totalPages}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-sm text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30 sm:h-8 sm:w-8"
         >
           ▶
         </button>

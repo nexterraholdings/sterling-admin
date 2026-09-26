@@ -1,6 +1,8 @@
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { isPropAccountEmail, PROP_ACCOUNT_EMAIL_PATTERN, SYSTEM_GROUP_OWNER_EMAIL } from "@/lib/prop-accounts";
+import { loadAccountVoices } from "@/lib/prop-voice-store";
+import { EMPTY_PROP_VOICE, type PropVoice } from "@/lib/prop-voice";
 
 export type AdminPropFolder = {
   id: string;
@@ -16,6 +18,7 @@ export type PropDirectoryAccount = {
   bio: string | null;
   createdAt: string | null;
   folderIds: string[];
+  voice: PropVoice;
 };
 
 export type PropDirectoryFolder = {
@@ -253,6 +256,7 @@ export async function listPropAccountDirectory(): Promise<PropAccountDirectory> 
     memberRows.push(...((members ?? []) as Array<{ folder_id: string; user_id: string }>));
   }
 
+  const voices = await loadAccountVoices();
   const userIdsByFolder = new Map<string, string[]>();
   const folderIdsByUser = new Map<string, string[]>();
   for (const member of memberRows) {
@@ -275,6 +279,7 @@ export async function listPropAccountDirectory(): Promise<PropAccountDirectory> 
       bio: row.bio ?? null,
       createdAt: row.created_at ?? null,
       folderIds: folderIdsByUser.get(String(row.id)) ?? [],
+      voice: voices.get(String(row.id)) ?? { ...EMPTY_PROP_VOICE },
     })),
     folders: folderRows.map((row) => ({
       id: String(row.id),

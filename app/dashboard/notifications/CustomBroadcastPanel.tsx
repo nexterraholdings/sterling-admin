@@ -160,20 +160,20 @@ export function CustomBroadcastPanel({ definitionsVersion }: { definitionsVersio
   }
 
   return (
-    <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
+    <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm sm:p-6">
       <h3 className="text-lg font-semibold text-zinc-50">Send to all users</h3>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => setMode("system")}
-          className={`rounded-full px-4 py-1.5 text-sm font-medium ${mode === "system" ? "bg-white text-zinc-900" : "border border-zinc-700 text-zinc-400"}`}
+          className={`min-h-11 rounded-full px-4 text-sm font-medium sm:min-h-0 sm:py-1.5 ${mode === "system" ? "bg-white text-zinc-900" : "border border-zinc-700 text-zinc-400"}`}
         >
           System broadcast
         </button>
         <button
           type="button"
           onClick={() => setMode("custom")}
-          className={`rounded-full px-4 py-1.5 text-sm font-medium ${mode === "custom" ? "bg-white text-zinc-900" : "border border-zinc-700 text-zinc-400"}`}
+          className={`min-h-11 rounded-full px-4 text-sm font-medium sm:min-h-0 sm:py-1.5 ${mode === "custom" ? "bg-white text-zinc-900" : "border border-zinc-700 text-zinc-400"}`}
         >
           Custom type
         </button>
@@ -323,18 +323,18 @@ export function CustomBroadcastPanel({ definitionsVersion }: { definitionsVersio
             type="button"
             disabled={!canSend}
             onClick={() => setConfirming(true)}
-            className="rounded-full bg-white px-5 py-2 text-sm font-medium text-zinc-900 disabled:opacity-50"
+            className="min-h-11 w-full rounded-full bg-white px-5 text-sm font-medium text-zinc-900 disabled:opacity-50 sm:w-auto sm:py-2"
           >
             Send to all users
           </button>
         ) : (
           <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
             <p className="text-sm font-semibold text-amber-300">Send this notification to all users now?</p>
-            <div className="mt-3 flex gap-3">
-              <button type="button" onClick={() => setConfirming(false)} className="rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300">
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:gap-3">
+              <button type="button" onClick={() => setConfirming(false)} className="min-h-11 rounded-full border border-zinc-700 px-4 text-sm text-zinc-300 sm:min-h-0 sm:py-2">
                 Cancel
               </button>
-              <button type="button" disabled={sending} onClick={handleSend} className="rounded-full bg-amber-600 px-4 py-2 text-sm text-white disabled:opacity-50">
+              <button type="button" disabled={sending} onClick={handleSend} className="min-h-11 rounded-full bg-amber-600 px-4 text-sm text-white disabled:opacity-50 sm:min-h-0 sm:py-2">
                 {sending ? "Sending…" : "Confirm send"}
               </button>
             </div>

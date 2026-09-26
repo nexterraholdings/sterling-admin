@@ -84,6 +84,34 @@ export const SYSTEM_NOTIFICATION_CATALOG: SystemNotificationDefinition[] = [
     pipeline: "app",
     preferenceColumn: "notif_likes",
   },
+  {
+    type: "clip_like",
+    category: "Social & feed",
+    trigger: "Like on your Clip",
+    pipeline: "app",
+    preferenceColumn: "notif_likes",
+  },
+  {
+    type: "clip_comment",
+    category: "Social & feed",
+    trigger: "Comment or reply on your Clip",
+    pipeline: "app",
+    preferenceColumn: "notif_comments",
+  },
+  {
+    type: "new_clip",
+    category: "Social & feed",
+    trigger: "Someone you follow posted a Clip",
+    pipeline: "app",
+    preferenceColumn: null,
+  },
+  {
+    type: "new_story",
+    category: "Social & feed",
+    trigger: "Someone you follow posted a story",
+    pipeline: "app",
+    preferenceColumn: null,
+  },
 
   // Communities
   {
@@ -159,6 +187,83 @@ export const SYSTEM_NOTIFICATION_CATALOG: SystemNotificationDefinition[] = [
     trigger: "Comment, rating, or reply on a discussion you steward",
     pipeline: "app",
     preferenceColumn: "notif_discussion_replies",
+  },
+  {
+    type: "area_discussion_post",
+    category: "Area discussions",
+    trigger: "Compelling post in a hub you belong to and have not opened recently",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_updates",
+  },
+  {
+    type: "discussion_group_post",
+    category: "Area discussions",
+    trigger: "Compelling post in a group you belong to and have not opened recently",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_updates",
+  },
+  {
+    type: "discussion_group_member_joined",
+    category: "Area discussions",
+    trigger: "A group reaches a member milestone",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_updates",
+  },
+  {
+    type: "discussion_group_join_request",
+    category: "Area discussions",
+    trigger: "Request to join a group you manage",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_updates",
+  },
+  {
+    type: "discussion_group_join_approved",
+    category: "Area discussions",
+    trigger: "Group join request approved",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_updates",
+  },
+  {
+    type: "discussion_group_join_denied",
+    category: "Area discussions",
+    trigger: "Group join request declined",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_updates",
+  },
+  {
+    type: "nearby_people",
+    category: "Area discussions",
+    trigger: "Evening digest: people joined hubs near you",
+    pipeline: "cron",
+    preferenceColumn: "notif_nearby_people",
+  },
+  {
+    type: "local_posts_digest",
+    category: "Area discussions",
+    trigger: "Evening digest: strongest post in a hub near you",
+    pipeline: "cron",
+    preferenceColumn: "notif_local_posts_digest",
+  },
+  {
+    type: "area_discussion_owner_digest",
+    category: "Area discussions",
+    trigger: "Evening summary for a hub you own",
+    pipeline: "cron",
+    preferenceColumn: "notif_discussion_stewardship",
+  },
+  {
+    type: "area_discussion_owner_milestone",
+    category: "Area discussions",
+    trigger: "Your hub reached a neighbor milestone",
+    pipeline: "discussion",
+    preferenceColumn: "notif_discussion_stewardship",
+  },
+  {
+    type: "area_discussion_owner_unanswered",
+    category: "Area discussions",
+    trigger: "A neighbor is waiting for a reply",
+    pipeline: "cron",
+    preferenceColumn: "notif_discussion_stewardship",
   },
   {
     type: "area_discussion_invite",
@@ -290,6 +395,13 @@ export const SYSTEM_NOTIFICATION_CATALOG: SystemNotificationDefinition[] = [
     pipeline: "app",
     preferenceColumn: null,
   },
+  {
+    type: "win_back",
+    category: "Scheduled & onboarding",
+    trigger: "Come-back reminder after a stretch away",
+    pipeline: "cron",
+    preferenceColumn: null,
+  },
 
   // Admin & legacy
   {
@@ -327,4 +439,32 @@ const PIPELINE_LABEL: Record<SystemNotificationPipeline, string> = {
 
 export function pipelineLabel(pipeline: SystemNotificationPipeline): string {
   return PIPELINE_LABEL[pipeline];
+}
+
+/** Types the app sends that are newer than the original catalog. */
+const EXTRA_TYPE_LABELS: Record<string, string> = {
+  clip_like: "Like on your Clip",
+  clip_comment: "Comment or reply on your Clip",
+  new_clip: "Someone you follow posted a Clip",
+  new_story: "Someone you follow posted a story",
+  area_discussion_post: "New post in a hub you follow",
+  discussion_group_post: "New post in a group",
+  discussion_group_member_joined: "Someone joined a group",
+  discussion_group_join_request: "Request to join a group you manage",
+  discussion_group_join_approved: "Group join request approved",
+  discussion_group_join_denied: "Group join request declined",
+  nearby_people: "People joined hubs near you",
+  local_posts_digest: "New posts in hubs near you",
+  area_discussion_owner_digest: "Evening summary for a hub you own",
+  area_discussion_owner_milestone: "Your hub reached a neighbor milestone",
+  area_discussion_owner_unanswered: "A neighbor is waiting for a reply",
+  win_back: "Come-back reminder",
+};
+
+export function notificationTypeLabel(type: string): string {
+  return (
+    SYSTEM_NOTIFICATION_CATALOG.find((row) => row.type === type)?.trigger ??
+    EXTRA_TYPE_LABELS[type] ??
+    type.replace(/_/g, " ")
+  );
 }

@@ -2,7 +2,24 @@ import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { deleteGroupContent } from "@/lib/groups/db";
 import { isPropAccountEmail, PROP_ACCOUNT_EMAIL_PATTERN, SYSTEM_GROUP_OWNER_EMAIL } from "@/lib/prop-accounts";
+import { loadAccountVoice, loadAccountVoices, saveAccountVoice, writeAccountVoices } from "@/lib/prop-voice-store";
+import { EMPTY_PROP_VOICE, accountPace, lineVoice, voiceIsSet, type PropVoice } from "@/lib/prop-voice";
+import { loadRunMomentsSince, type RunMomentRow } from "@/lib/conversations/moments";
+import { loadExcludedByHub, loadRegionObjectives, loadRunPause } from "@/lib/conversations/region-runs";
 import { GROQ_MODEL, GroqCallError, personalityOrDefault, topicOrDefault, writeConversationLine } from "@/lib/conversations/groq";
+import { DEFAULT_GRAMMAR, parseAbbrev, parseGrammar, parseRunRules, parseSwearRate, serializeRunRules, type SwearRate } from "@/lib/conversations/rules";
+import {
+  DEFAULT_CALLS_PER_DAY,
+  DEFAULT_WEEK_END,
+  DEFAULT_WEEK_EVERY,
+  DEFAULT_WEEK_START,
+  describeWeek,
+  parseCallsPerDay,
+  parseEveryMinutes,
+  parseWeekDays,
+  parseWeekHour,
+  postsInWindow,
+} from "@/lib/conversations/week";
 import { startOfNyDay } from "@/lib/conversations/time";
 import type {
   ConversationActiveRun,
@@ -12,6 +29,8 @@ import type {
   ConversationLogEntry,
   ConversationPersona,
   ConversationQueueItem,
+  RegionRun,
+  RegionRunAccount,
   ConversationRunLine,
   ConversationSettings,
   ConversationUsage,
@@ -126,14 +145,14 @@ export async function loadConversationUsage(since = startOfNyDay()): Promise<Con
 
 export async function loadConversationDashboard(): Promise<ConversationDashboard> {
   const since = startOfNyDay();
-  const [settings, usage, props, openGroups, configResult, personaResult, folderResult, folderMemberResult, logResult, queueResult, openJobResult, todayJobResult] =
+  const [settings, usage, props, openGroups, configResult, personaResult, folderResult, folderMemberResult, logResult, queueResult, openJobResult, todayJobResult, finishedJobResult] =
     await Promise.all([
     loadConversationSettings(),
     loadConversationUsage(since),
     listPropProfiles(),
     listOpenGroups(),
-    supabaseAdmin.from("prop_conversation_groups").select("group_id, enabled, topic, posts_per_day, replies_per_post, auto_continue"),
-    supabaseAdmin.from("prop_account_personas").select("user_id, personality"),
+    supabaseAdmin.from("prop_conversation_groups").select("group_id, enabled, topic, posts_per_day, replies_per_post, auto_continue, rules, swear, swear_rate, grammar, abbrev, week_days, week_start_hour, week_end_hour, week_every_minutes, calls_per_day"),
+    loadAccountVoices(),
     supabaseAdmin.from("admin_prop_folders").select("id,name,parent_id").order("name", { ascending: true }).limit(1000),
     supabaseAdmin.from("admin_prop_folder_members").select("folder_id,user_id").limit(5000),
     supabaseAdmin
@@ -161,10 +180,16 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .limit(200),
+    supabaseAdmin
+      .from("prop_engagement_jobs")
+      .select("id, group_id, author_id, kind, status, run_at, body, error, cast_ids, spread_minutes, created_at")
+      .gte("finished_at", since)
+      .in("status", ["done", "failed", "skipped"])
+      .order("finished_at", { ascending: false })
+      .limit(200),
   ]);
 
   if (configResult.error) throw new Error(configResult.error.message);
-  if (personaResult.error) throw new Error(personaResult.error.message);
   if (folderResult.error && !isMissingSchemaError(folderResult.error)) throw new Error(folderResult.error.message);
   if (folderMemberResult.error && !isMissingSchemaError(folderMemberResult.error)) {
     throw new Error(folderMemberResult.error.message);
@@ -173,6 +198,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
   if (queueResult.error) throw new Error(queueResult.error.message);
   if (openJobResult.error) throw new Error(openJobResult.error.message);
   if (todayJobResult.error) throw new Error(todayJobResult.error.message);
+  if (finishedJobResult.error) throw new Error(finishedJobResult.error.message);
 
   const memberships = await membershipsFor(props.map((profile) => profile.id));
   const membersByGroup = new Map<string, number>();
@@ -196,7 +222,23 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
 
   const configByGroup = new Map<
     string,
-    { enabled: boolean; topic: string; postsPerDay: number; repliesPerPost: number; autoContinue: boolean }
+    {
+      enabled: boolean;
+      topic: string;
+      postsPerDay: number;
+      repliesPerPost: number;
+      autoContinue: boolean;
+      rules: string[];
+      swear: boolean;
+      swearRate: SwearRate;
+      grammar: number;
+      abbrev: number;
+      weekDays: number;
+      weekStartHour: number;
+      weekEndHour: number;
+      weekEveryMinutes: number;
+      callsPerDay: number;
+    }
   >(
     ((configResult.data ?? []) as Array<{
       group_id: string;
@@ -205,6 +247,16 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
       posts_per_day: number | null;
       replies_per_post: number | null;
       auto_continue: boolean | null;
+      rules: string | null;
+      swear: boolean | null;
+      swear_rate: string | null;
+      grammar: number | null;
+      abbrev: number | null;
+      week_days: number | null;
+      week_start_hour: number | null;
+      week_end_hour: number | null;
+      week_every_minutes: number | null;
+      calls_per_day: number | null;
     }>).map((row) => [
       String(row.group_id),
       {
@@ -213,16 +265,20 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
         postsPerDay: Number(row.posts_per_day ?? 2),
         repliesPerPost: Number(row.replies_per_post ?? 2),
         autoContinue: row.auto_continue !== false,
+        rules: parseRunRules(row.rules),
+        swear: Boolean(row.swear),
+        swearRate: parseSwearRate(row.swear_rate),
+        grammar: parseGrammar(row.grammar),
+        abbrev: parseAbbrev(row.abbrev),
+        weekDays: parseWeekDays(row.week_days),
+        weekStartHour: parseWeekHour(row.week_start_hour, DEFAULT_WEEK_START, 0, 23),
+        weekEndHour: parseWeekHour(row.week_end_hour, DEFAULT_WEEK_END, 1, 24),
+        weekEveryMinutes: parseEveryMinutes(row.week_every_minutes),
+        callsPerDay: parseCallsPerDay(row.calls_per_day),
       },
     ]),
   );
 
-  const personaByUser = new Map<string, string>(
-    ((personaResult.data ?? []) as Array<{ user_id: string; personality: string | null }>).map((row) => [
-      String(row.user_id),
-      String(row.personality ?? ""),
-    ]),
-  );
   const profileName = (profile: PropProfile) => profile.full_name?.trim() || profile.username?.trim() || "Prop account";
   const nameByUser = new Map(props.map((profile) => [profile.id, profileName(profile)]));
   const profileById = new Map(props.map((profile) => [profile.id, profile]));
@@ -246,11 +302,22 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
       title: String(row.title ?? "Untitled group"),
       description: row.description?.trim() ? row.description.trim() : null,
       category: row.category?.trim() ? row.category.trim() : null,
+      hubId: String(row.discussion_id ?? ""),
       hubTitle: hubs.get(String(row.discussion_id ?? "")) ?? null,
       propMemberCount: membersByGroup.get(id) ?? 0,
       enabled,
       autoContinue: config?.autoContinue ?? true,
       topic: config?.topic ?? "",
+      rules: config?.rules ?? parseRunRules(null),
+      swear: config?.swear ?? false,
+      swearRate: config?.swearRate ?? "sometimes",
+      grammar: config?.grammar ?? DEFAULT_GRAMMAR,
+      abbrev: config?.abbrev ?? 0,
+      weekDays: config?.weekDays ?? 0,
+      weekStartHour: config?.weekStartHour ?? DEFAULT_WEEK_START,
+      weekEndHour: config?.weekEndHour ?? DEFAULT_WEEK_END,
+      weekEveryMinutes: config?.weekEveryMinutes ?? DEFAULT_WEEK_EVERY,
+      callsPerDay: config?.callsPerDay ?? DEFAULT_CALLS_PER_DAY,
       postsPerDay: config?.postsPerDay ?? 2,
       repliesPerPost: config?.repliesPerPost ?? 2,
       members,
@@ -272,15 +339,24 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
       }));
 
   const personas: ConversationPersona[] = props
-    .map((profile) => ({
+    .map((profile) => {
+      const voice = personaResult.get(profile.id) ?? EMPTY_PROP_VOICE;
+      return {
       userId: profile.id,
       name: profileName(profile),
       username: profile.username,
-      personality: personaByUser.get(profile.id) ?? "",
+      personality: voice.personality,
+      swear: voice.swear,
+      swearRate: voice.swearRate,
+      grammar: voice.grammar,
+      abbrev: voice.abbrev,
+      behavior: voice.behavior,
+      traits: voice.traits,
       folderId: folderByUser.get(profile.id) ?? null,
       avatarUrl: profile.avatar_url?.trim() ? profile.avatar_url : null,
       bio: profile.bio ?? "",
-    }))
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
   const titleByGroup = new Map(groups.map((group) => [group.id, group.title]));
   const log: ConversationLogEntry[] = (
@@ -323,7 +399,17 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
     runAt: String(row.run_at),
   }));
 
-  const activeRuns = buildActiveRuns(openJobResult.data ?? [], todayJobResult.data ?? [], groups, nameByUser);
+  const moments = await loadRunMomentsSince(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+  const [objectives, excludedByHub, pausedByHub] = await Promise.all([loadRegionObjectives(), loadExcludedByHub(), loadRunPause()]);
+  const activeRuns = buildActiveRuns(
+    openJobResult.data ?? [],
+    [...(todayJobResult.data ?? []), ...(finishedJobResult.data ?? [])],
+    groups,
+    nameByUser,
+    moments,
+    personaResult,
+  );
+  const regionRuns = buildRegionRuns(groups, activeRuns, objectives, excludedByHub, pausedByHub, personaResult);
 
   return {
     settings,
@@ -337,6 +423,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
     queue,
     log,
     activeRuns,
+    regionRuns,
   };
 }
 
@@ -371,26 +458,31 @@ function runStatus(status: string): ConversationRunLine["status"] {
 
 function buildActiveRuns(
   openJobs: RunJobRow[],
-  todayJobs: RunJobRow[],
+  recentJobs: RunJobRow[],
   groups: ConversationGroup[],
   nameByUser: Map<string, string>,
+  moments: RunMomentRow[],
+  voices: Map<string, PropVoice>,
 ): ConversationActiveRun[] {
-  const openIds = new Set(openJobs.map((job) => String(job.group_id)));
-  if (openIds.size === 0) return [];
   const merged = new Map<string, RunJobRow>();
-  for (const job of [...todayJobs, ...openJobs]) merged.set(String(job.id), job);
+  for (const job of [...recentJobs, ...openJobs]) merged.set(String(job.id), job);
   const byGroup = new Map<string, RunJobRow[]>();
   for (const job of merged.values()) {
     const groupId = String(job.group_id);
-    if (!openIds.has(groupId)) continue;
     const list = byGroup.get(groupId) ?? [];
     list.push(job);
     byGroup.set(groupId, list);
   }
-  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const latestMoment = new Map<string, RunMomentRow>();
+  for (const moment of moments) {
+    const key = `${moment.group_id}:${moment.user_id}`;
+    if (!latestMoment.has(key)) latestMoment.set(key, moment);
+  }
   const runs: ConversationActiveRun[] = [];
-  for (const [groupId, jobs] of byGroup) {
-    const group = groupById.get(groupId);
+  for (const group of groups) {
+    if (group.members.length === 0) continue;
+    const groupId = group.id;
+    const jobs = byGroup.get(groupId) ?? [];
     const posts = [...jobs]
       .filter((job) => job.kind === "start_post")
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
@@ -407,6 +499,7 @@ function buildActiveRuns(
         id: String(job.id),
         authorId: String(job.author_id),
         authorName: nameByUser.get(String(job.author_id)) ?? "Prop account",
+        groupTitle: group?.title ?? "Group",
         kind: job.kind === "reply" ? "reply" : "start_post",
         status: runStatus(String(job.status)),
         runAt: String(job.run_at),
@@ -414,6 +507,26 @@ function buildActiveRuns(
         error: job.error ? String(job.error) : null,
       }));
     const waiting = lines.filter((line) => line.status === "pending");
+    const live = lines.some((line) => line.status === "pending" || line.status === "running" || line.status === "done");
+    const accounts = (group.members.length > 0 ? group.members : accountIds.map((userId) => ({ userId, name: nameByUser.get(userId) ?? "Prop account", username: null }))).map(
+      (member) => {
+        const moment = latestMoment.get(`${groupId}:${member.userId}`) ?? null;
+        const spoke = lines
+          .filter((line) => line.authorId === member.userId && line.status === "done")
+          .map((line) => line.runAt)
+          .sort()
+          .at(-1);
+        return {
+          userId: member.userId,
+          name: member.name,
+          pace: moment?.pace || accountPace(voices.get(member.userId)),
+          lastSpokeAt: spoke ?? null,
+          moment: moment
+            ? { at: moment.at, decision: moment.decision, subject: moment.subject, pace: moment.pace }
+            : null,
+        };
+      },
+    );
     runs.push({
       groupId,
       groupTitle: group?.title ?? "Group",
@@ -423,9 +536,21 @@ function buildActiveRuns(
       posts: lines.filter((line) => line.kind === "start_post").length,
       repliesPerPost: group?.repliesPerPost ?? 0,
       repliesQueued: lines.filter((line) => line.kind === "reply").length,
-      pace: paceLabel(paceSource?.spread_minutes ?? null),
+      pace: group && group.weekDays > 0
+        ? describeWeek(group.weekDays, group.weekStartHour, group.weekEndHour, group.weekEveryMinutes, group.callsPerDay)
+        : paceLabel(paceSource?.spread_minutes ?? null),
       autoContinue: Boolean(group?.enabled && group.autoContinue),
       postsPerDay: group?.postsPerDay ?? 0,
+      rules: group?.rules ?? parseRunRules(null),
+      swear: group?.swear ?? false,
+      swearRate: group?.swearRate ?? "sometimes",
+      grammar: group?.grammar ?? DEFAULT_GRAMMAR,
+      abbrev: group?.abbrev ?? 0,
+      weekDays: group?.weekDays ?? 0,
+      weekStartHour: group?.weekStartHour ?? DEFAULT_WEEK_START,
+      weekEndHour: group?.weekEndHour ?? DEFAULT_WEEK_END,
+      weekEveryMinutes: group?.weekEveryMinutes ?? DEFAULT_WEEK_EVERY,
+      callsPerDay: group?.callsPerDay ?? DEFAULT_CALLS_PER_DAY,
       sent: lines.filter((line) => line.status === "done").length,
       waiting: waiting.length,
       running: lines.filter((line) => line.status === "running").length,
@@ -433,9 +558,134 @@ function buildActiveRuns(
       total: lines.length,
       nextAt: waiting.map((line) => line.runAt).sort()[0] ?? null,
       lines,
+      interacting: Boolean(group.enabled && live),
+      accounts,
     });
   }
-  return runs.sort((a, b) => a.groupTitle.localeCompare(b.groupTitle));
+  return runs.sort((a, b) => Number(b.interacting) - Number(a.interacting) || a.groupTitle.localeCompare(b.groupTitle));
+}
+
+function emptySnapshot(group: ConversationGroup): ConversationActiveRun {
+  return {
+    groupId: group.id,
+    groupTitle: group.title,
+    topic: group.topic.trim() || "Whatever the group is about",
+    accountIds: group.members.map((member) => member.userId),
+    accountNames: group.members.map((member) => member.name),
+    posts: 0,
+    repliesPerPost: group.repliesPerPost,
+    repliesQueued: 0,
+    pace: group.weekDays > 0
+      ? describeWeek(group.weekDays, group.weekStartHour, group.weekEndHour, group.weekEveryMinutes, group.callsPerDay)
+      : "Right now",
+    autoContinue: group.enabled && group.autoContinue,
+    postsPerDay: group.postsPerDay,
+    rules: group.rules,
+    swear: group.swear,
+    swearRate: group.swearRate,
+    grammar: group.grammar,
+    abbrev: group.abbrev,
+    weekDays: group.weekDays,
+    weekStartHour: group.weekStartHour,
+    weekEndHour: group.weekEndHour,
+    weekEveryMinutes: group.weekEveryMinutes,
+    callsPerDay: group.callsPerDay,
+    sent: 0,
+    waiting: 0,
+    running: 0,
+    failed: 0,
+    total: 0,
+    nextAt: null,
+    lines: [],
+    interacting: false,
+    accounts: [],
+  };
+}
+
+function mergeSnapshots(runs: ConversationActiveRun[], fallback: ConversationGroup): ConversationActiveRun {
+  const base = runs[0] ?? emptySnapshot(fallback);
+  if (runs.length <= 1) return base;
+  const lines = runs.flatMap((run) => run.lines).sort((a, b) => a.runAt.localeCompare(b.runAt));
+  const waiting = lines.filter((line) => line.status === "pending");
+  return {
+    ...base,
+    posts: lines.filter((line) => line.kind === "start_post").length,
+    repliesQueued: lines.filter((line) => line.kind === "reply").length,
+    sent: lines.filter((line) => line.status === "done").length,
+    waiting: waiting.length,
+    running: lines.filter((line) => line.status === "running").length,
+    failed: lines.filter((line) => line.status === "failed").length,
+    total: lines.length,
+    nextAt: waiting.map((line) => line.runAt).sort()[0] ?? null,
+    lines,
+    interacting: runs.some((run) => run.interacting),
+    accounts: runs.flatMap((run) => run.accounts),
+  };
+}
+
+function buildRegionRuns(
+  groups: ConversationGroup[],
+  runs: ConversationActiveRun[],
+  objectives: Map<string, string>,
+  excludedByHub: Map<string, Set<string>>,
+  pausedByHub: Map<string, boolean>,
+  voices: Map<string, PropVoice>,
+): RegionRun[] {
+  const runByGroup = new Map(runs.map((run) => [run.groupId, run]));
+  const byHub = new Map<string, ConversationGroup[]>();
+  for (const group of groups) {
+    const list = byHub.get(group.hubId) ?? [];
+    list.push(group);
+    byHub.set(group.hubId, list);
+  }
+  const regions: RegionRun[] = [];
+  for (const [hubId, hubGroups] of byHub) {
+    if (!hubGroups.some((group) => group.propMemberCount > 0)) continue;
+    const excluded = excludedByHub.get(hubId) ?? new Set<string>();
+    const included = hubGroups.filter((group) => group.enabled);
+    const includedRuns = included.map((group) => runByGroup.get(group.id)).filter((run): run is ConversationActiveRun => Boolean(run));
+    const lead = included[0] ?? hubGroups[0];
+    if (!lead) continue;
+    const accounts = new Map<string, RegionRunAccount>();
+    for (const group of hubGroups) {
+      const run = runByGroup.get(group.id);
+      for (const member of group.members) {
+        const current = accounts.get(member.userId);
+        const fromRun = run?.accounts.find((account) => account.userId === member.userId);
+        const moment = fromRun?.moment ?? null;
+        const newer = moment && (!current?.moment || moment.at > current.moment.at);
+        accounts.set(member.userId, {
+          userId: member.userId,
+          name: member.name,
+          pace: fromRun?.pace || current?.pace || accountPace(voices.get(member.userId)),
+          lastSpokeAt: [current?.lastSpokeAt, fromRun?.lastSpokeAt].filter(Boolean).sort().at(-1) ?? null,
+          moment: newer || !current?.moment ? moment ?? current?.moment ?? null : current.moment,
+          included: !excluded.has(member.userId),
+          groupTitles: [...(current?.groupTitles ?? []), group.title],
+        });
+      }
+    }
+    const snapshot = mergeSnapshots(includedRuns, lead);
+    regions.push({
+      hubId,
+      title: hubId ? lead.hubTitle?.trim() || "Region" : "No region",
+      objective: objectives.get(hubId) ?? "",
+      paused: Boolean(pausedByHub.get(hubId)),
+      interacting: includedRuns.some((run) => run.interacting),
+      groups: hubGroups
+        .map((group) => ({
+          groupId: group.id,
+          title: group.title,
+          included: group.enabled,
+          interacting: Boolean(runByGroup.get(group.id)?.interacting),
+          propMemberCount: group.propMemberCount,
+        }))
+        .sort((a, b) => Number(b.included) - Number(a.included) || a.title.localeCompare(b.title)),
+      accounts: [...accounts.values()].sort((a, b) => Number(b.included) - Number(a.included) || a.name.localeCompare(b.name)),
+      snapshot,
+    });
+  }
+  return regions.sort((a, b) => Number(b.interacting) - Number(a.interacting) || a.title.localeCompare(b.title));
 }
 
 export async function saveConversationSettings(patch: Partial<ConversationSettings>): Promise<void> {
@@ -470,6 +720,47 @@ export async function countPropMembers(groupId: string): Promise<number> {
   const ids = new Set(props.map((profile) => profile.id));
   const memberships = await membershipsFor([...ids]);
   return memberships.filter((row) => String(row.group_id) === groupId && ids.has(String(row.user_id))).length;
+}
+
+export async function setRegionGroups(hubId: string, groupIds: string[]): Promise<void> {
+  const wanted = new Set(groupIds);
+  const { data, error } = await supabaseAdmin.from("discussion_groups").select("id").eq("discussion_id", hubId);
+  if (error) throw new Error(error.message);
+  const inHub = ((data ?? []) as Array<{ id: string }>).map((row) => String(row.id));
+  if ([...wanted].some((id) => !inHub.includes(id))) throw new Error("Choose groups in the same region.");
+  for (const id of inHub) await setGroupIncluded(id, wanted.has(id));
+}
+
+export async function setGroupIncluded(groupId: string, included: boolean): Promise<void> {
+  if (!included) {
+    const { error } = await supabaseAdmin
+      .from("prop_conversation_groups")
+      .update({ enabled: false, updated_at: new Date().toISOString() })
+      .eq("group_id", groupId);
+    if (error) throw new Error(error.message);
+    return;
+  }
+  const propMembers = await countPropMembers(groupId);
+  if (propMembers < 2) throw new Error("A group needs at least two prop accounts before it can join the run.");
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from("prop_conversation_groups")
+    .select("topic, posts_per_day, replies_per_post")
+    .eq("group_id", groupId)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message);
+  const { error } = await supabaseAdmin.from("prop_conversation_groups").upsert(
+    {
+      group_id: groupId,
+      enabled: true,
+      topic: String(existing?.topic ?? "").slice(0, 280),
+      posts_per_day: clampInt(Number(existing?.posts_per_day ?? 2), 0, 20),
+      replies_per_post: clampInt(Number(existing?.replies_per_post ?? 2), 0, 6),
+      auto_continue: true,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "group_id" },
+  );
+  if (error) throw new Error(error.message);
 }
 
 export async function saveConversationGroup(input: {
@@ -507,26 +798,8 @@ export async function saveConversationGroup(input: {
   if (error) throw new Error(error.message);
 }
 
-export async function savePersona(userId: string, personality: string): Promise<void> {
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .select("id, email")
-    .eq("id", userId)
-    .maybeSingle();
-  if (profileError) throw new Error(profileError.message);
-  if (!profile || !isPropAccountEmail(profile.email) || profile.email?.toLowerCase() === SYSTEM_GROUP_OWNER_EMAIL) {
-    throw new Error("Personalities are only for prop accounts.");
-  }
-
-  const { error } = await supabaseAdmin.from("prop_account_personas").upsert(
-    {
-      user_id: userId,
-      personality: personality.trim().slice(0, 500),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id" },
-  );
-  if (error) throw new Error(error.message);
+export async function savePersona(userId: string, voice: PropVoice): Promise<void> {
+  await saveAccountVoice(userId, voice);
 }
 
 export async function pauseAllConversationGroups(): Promise<void> {
@@ -535,6 +808,100 @@ export async function pauseAllConversationGroups(): Promise<void> {
     .update({ enabled: false, updated_at: new Date().toISOString() })
     .eq("enabled", true);
   if (error) throw new Error(error.message);
+}
+
+export async function saveWeekSchedule(
+  groupId: string,
+  input: {
+    days: number;
+    startHour: number;
+    endHour: number;
+    everyMinutes: number;
+    callsPerDay: number;
+  },
+): Promise<void> {
+  const days = parseWeekDays(input.days);
+  const startHour = parseWeekHour(input.startHour, DEFAULT_WEEK_START, 0, 23);
+  const endHour = parseWeekHour(input.endHour, DEFAULT_WEEK_END, 1, 24);
+  if (days > 0 && endHour <= startHour) throw new Error("The end time has to be later than the start.");
+  if (days > 0) {
+    const { data: current, error: currentError } = await supabaseAdmin
+      .from("prop_conversation_groups")
+      .select("replies_per_post")
+      .eq("group_id", groupId)
+      .maybeSingle();
+    if (currentError) throw new Error(currentError.message);
+    const replies = Number(current?.replies_per_post ?? 0);
+    if (postsInWindow(startHour, endHour, parseEveryMinutes(input.everyMinutes), parseCallsPerDay(input.callsPerDay), replies) < 1) {
+      throw new Error("Allow enough calls a day for each post and its replies.");
+    }
+  }
+  const patch: Record<string, unknown> = {
+    week_days: days,
+    week_start_hour: startHour,
+    week_end_hour: endHour,
+    week_every_minutes: parseEveryMinutes(input.everyMinutes),
+    calls_per_day: parseCallsPerDay(input.callsPerDay),
+    updated_at: new Date().toISOString(),
+  };
+  if (days > 0) {
+    patch.enabled = true;
+    patch.auto_continue = true;
+  }
+  const { data, error } = await supabaseAdmin.from("prop_conversation_groups").update(patch).eq("group_id", groupId).select("group_id");
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("That group has no conversation settings yet. Start a run first.");
+}
+
+export async function clearFutureStartPosts(groupId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("prop_engagement_jobs")
+    .delete()
+    .eq("group_id", groupId)
+    .eq("kind", "start_post")
+    .eq("status", "pending")
+    .gt("run_at", new Date(Date.now() + 2 * 60_000).toISOString());
+  if (error) throw new Error(error.message);
+}
+
+export async function saveRunAbbrev(groupId: string, abbrev: number): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from("prop_conversation_groups")
+    .update({ abbrev: parseAbbrev(abbrev), updated_at: new Date().toISOString() })
+    .eq("group_id", groupId)
+    .select("group_id");
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("That group has no conversation settings yet. Start a run first.");
+}
+
+export async function saveRunGrammar(groupId: string, grammar: number): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from("prop_conversation_groups")
+    .update({ grammar: parseGrammar(grammar), updated_at: new Date().toISOString() })
+    .eq("group_id", groupId)
+    .select("group_id");
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("That group has no conversation settings yet. Start a run first.");
+}
+
+export async function saveRunSwear(groupId: string, swear: boolean, swearRate: SwearRate): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from("prop_conversation_groups")
+    .update({ swear, swear_rate: parseSwearRate(swearRate), updated_at: new Date().toISOString() })
+    .eq("group_id", groupId)
+    .select("group_id");
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("That group has no conversation settings yet. Start a run first.");
+}
+
+export async function saveRunRules(groupId: string, rules: string[]): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from("prop_conversation_groups")
+    .update({ rules: serializeRunRules(rules), updated_at: new Date().toISOString() })
+    .eq("group_id", groupId)
+    .select("group_id");
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("That group has no conversation settings yet. Start a run first.");
 }
 
 export async function setConversationAutoContinue(
@@ -593,6 +960,38 @@ export async function queueConversationPost(groupId: string, userId: string): Pr
   if (error) throw new Error(error.message);
 }
 
+export async function updateSentConversationLine(jobId: string, body: string): Promise<void> {
+  const text = body.replace(/\s+/g, " ").trim();
+  if (!text) throw new Error("Write something before saving.");
+  if (text.length > 1000) throw new Error("Keep the post under 1000 characters.");
+
+  const { data, error } = await supabaseAdmin
+    .from("prop_engagement_jobs")
+    .select("id, group_id, comment_id")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data?.comment_id || !data.group_id) throw new Error("That line has no post to edit.");
+
+  const { error: rpcError } = await supabaseAdmin.rpc("admin_update_area_discussion_comment", {
+    p_comment_id: data.comment_id,
+    p_body: text,
+  });
+  if (rpcError) {
+    const missing = /could not find the function|does not exist|PGRST202/i.test(rpcError.message ?? "");
+    if (!missing) throw new Error(rpcError.message);
+    const { error: updateError } = await supabaseAdmin
+      .from("area_discussion_comments")
+      .update({ body: text })
+      .eq("id", data.comment_id)
+      .eq("group_id", data.group_id);
+    if (updateError) throw new Error(updateError.message);
+  }
+
+  const { error: jobError } = await supabaseAdmin.from("prop_engagement_jobs").update({ body: text }).eq("id", jobId);
+  if (jobError) throw new Error(jobError.message);
+}
+
 export async function removeSentConversationLine(jobId: string): Promise<void> {
   const { data, error } = await supabaseAdmin
     .from("prop_engagement_jobs")
@@ -610,14 +1009,8 @@ export async function removeSentConversationLine(jobId: string): Promise<void> {
 }
 
 export async function copyPersonalityToCast(userId: string): Promise<number> {
-  const { data: persona, error: personaError } = await supabaseAdmin
-    .from("prop_account_personas")
-    .select("personality")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (personaError) throw new Error(personaError.message);
-  const personality = String(persona?.personality ?? "").trim();
-  if (!personality) throw new Error("Write a personality before copying it.");
+  const voice = await loadAccountVoice(userId);
+  if (!voiceIsSet(voice)) throw new Error("Set this account's behavior before copying it.");
 
   const { data: enabledRows, error: enabledError } = await supabaseAdmin
     .from("prop_conversation_groups")
@@ -635,12 +1028,7 @@ export async function copyPersonalityToCast(userId: string): Promise<number> {
   }
   if (targets.size === 0) throw new Error("No other accounts in the groups that are on.");
 
-  const now = new Date().toISOString();
-  const { error } = await supabaseAdmin.from("prop_account_personas").upsert(
-    [...targets].map((id) => ({ user_id: id, personality, updated_at: now })),
-    { onConflict: "user_id" },
-  );
-  if (error) throw new Error(error.message);
+  await writeAccountVoices([...targets], voice);
   return targets.size;
 }
 
@@ -687,19 +1075,31 @@ export async function previewGroupLine(groupId: string, userId: string): Promise
   const members = await loadPropMemberIdsByGroup();
   if (!(members.get(groupId) ?? []).includes(userId)) throw new Error("That account is not in this group.");
 
-  const [{ data: config, error: configError }, { data: persona, error: personaError }] = await Promise.all([
-    supabaseAdmin.from("prop_conversation_groups").select("topic").eq("group_id", groupId).maybeSingle(),
-    supabaseAdmin.from("prop_account_personas").select("personality").eq("user_id", userId).maybeSingle(),
+  const [{ data: config, error: configError }, voice] = await Promise.all([
+    supabaseAdmin.from("prop_conversation_groups").select("topic, rules, swear, swear_rate, grammar, abbrev").eq("group_id", groupId).maybeSingle(),
+    loadAccountVoice(userId),
   ]);
   if (configError) throw new Error(configError.message);
-  if (personaError) throw new Error(personaError.message);
+  const speaking = lineVoice(voice, {
+    swear: Boolean(config?.swear),
+    swearRate: parseSwearRate(config?.swear_rate),
+    grammar: parseGrammar(config?.grammar),
+    abbrev: parseAbbrev(config?.abbrev),
+  });
 
   try {
     const line = await writeConversationLine({
       topic: topicOrDefault(config?.topic),
-      personality: personalityOrDefault(persona?.personality),
+      personality: personalityOrDefault(speaking.personality),
+      behavior: speaking.behavior,
+      character: speaking.character,
       kind: "start_post",
       parentBody: null,
+      rules: parseRunRules(config?.rules),
+      swear: speaking.swear,
+      swearRate: speaking.swearRate,
+      grammar: speaking.grammar,
+      abbrev: speaking.abbrev,
     });
     await logGroqCall({
       model: line.model,

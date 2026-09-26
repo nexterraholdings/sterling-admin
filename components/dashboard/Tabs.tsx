@@ -88,10 +88,11 @@ export function Tabs({
 
   return (
     <div className={className}>
+      <div className={variant === "segmented" ? "max-w-full overflow-x-auto" : undefined}>
       <div
         className={
           variant === "segmented"
-            ? "relative inline-flex rounded-2xl bg-zinc-800 p-1"
+            ? "relative inline-flex min-w-full rounded-2xl bg-zinc-800 p-1"
             : "relative flex flex-wrap items-center gap-1"
         }
       >
@@ -117,10 +118,10 @@ export function Tabs({
 
         {tabs.map((tab, idx) => {
           const isActive = activeTab === tab.id;
-          const base = size === "sm" ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm";
+          const base = size === "sm" ? "min-h-9 px-3 text-xs" : "min-h-11 px-4 text-sm sm:min-h-0 sm:py-2";
 
           let classes =
-            "relative z-10 flex items-center gap-2 font-medium transition-all duration-200 rounded-xl select-none";
+            "relative z-10 flex shrink-0 items-center gap-2 whitespace-nowrap font-medium transition-all duration-200 rounded-xl select-none";
 
           if (variant === "pills") {
             classes += isActive
@@ -163,6 +164,7 @@ export function Tabs({
             </button>
           );
         })}
+      </div>
       </div>
 
       {children && <div className="mt-6">{children(activeTab)}</div>}

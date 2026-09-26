@@ -1,39 +1,53 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
-import { AlertTriangle, ChevronDown, ChevronLeft, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronUp, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { ConversationDirectory } from "@/app/dashboard/conversations/ConversationDirectory";
-import { RunConversationDialog } from "@/app/dashboard/conversations/RunConversationDialog";
+import { RunConversationDialog, WeekFields } from "@/app/dashboard/conversations/RunConversationDialog";
 import {
+  addAccountsToGroup,
   clearQueuedLines,
   copyPersonality,
   pauseAllGroups,
-  previewConversationLine,
-  queueGroupPost,
   removeSentLine,
   refreshConversations,
   retryFailedLines,
-  runConversationsOnce,
-  saveGroupConversation,
-  savePropPersonality,
+  startRegionRun,
+  savePropVoice,
+  saveRegionAbbrev,
+  saveRegionGrammar,
+  saveRegionObjectiveAction,
+  saveRegionRules,
+  saveRegionSwear,
+  saveRegionWeek,
+  addRegionPostsToday,
+  setRegionAccountIncluded,
+  setRegionAutomatic,
+  setRegionGroupIncluded,
+  setRegionRunPaused,
   sendQueuedLineNow,
   setActiveHours,
   setConversationEnabled,
   setDailyCallBudget,
-  setGroupAutomatic,
   skipQueuedLine,
+  updateSentLine,
 } from "@/app/dashboard/conversations/actions";
-import { withinActiveHours } from "@/lib/conversations/time";
+import { nyDateKey, withinActiveHours } from "@/lib/conversations/time";
+import { abbrevHint, abbrevLabel, editableRunRules, forbidsHyphens, grammarHint, grammarLabel, serializeRunRules, SWEAR_RATES, withNoHyphenRule, type SwearRate } from "@/lib/conversations/rules";
+import { describeWeek, postsInWindow } from "@/lib/conversations/week";
 import { TOPIC_DIRECTIONS } from "@/lib/conversations/types";
+import { samePropVoice, voiceIsSet, type PropVoice } from "@/lib/prop-voice";
+import { PropVoiceFields } from "@/app/dashboard/users/prop-accounts/PropVoiceFields";
 import type {
   ConversationActiveRun,
   ConversationDashboard,
   ConversationGroup,
   ConversationPersona,
   ConversationSettings,
-  ManualRunRequest,
+  RegionRun,
 } from "@/lib/conversations/types";
 
 const inputCls =
@@ -66,6 +80,7 @@ function formatWhen(value: string | null) {
 }
 
 export function ConversationsClient({ initial }: { initial: ConversationDashboard }) {
+  const router = useRouter();
   const [data, setData] = useState(initial);
   const [budget, setBudget] = useState(String(initial.settings.dailyCallBudget));
   const [startHour, setStartHour] = useState(String(initial.settings.activeStartHour));
@@ -75,16 +90,20 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
   const [selection, setSelection] = useState<{ kind: "group" | "account"; id: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [autopilotOpen, setAutopilotOpen] = useState(false);
+  const [dropGroupId, setDropGroupId] = useState<string | null>(null);
+  const ignoreGroupClick = useRef(false);
+
+  const runLive = data.settings.enabled || data.regionRuns.some((run) => run.interacting);
 
   useEffect(() => {
-    if (data.activeRuns.length === 0) return;
+    if (!runLive) return;
     const timer = window.setInterval(() => {
       void refreshConversations()
         .then((next) => setData(next))
         .catch(() => undefined);
     }, 15000);
     return () => window.clearInterval(timer);
-  }, [data.activeRuns.length]);
+  }, [runLive]);
 
   const activeGroups = useMemo(() => data.groups.filter((group) => group.enabled), [data.groups]);
   const railGroups = useMemo(() => {
@@ -97,7 +116,6 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
   const groupPageSafe = Math.min(groupPage, groupPageCount);
   const visibleGroups = railGroups.slice((groupPageSafe - 1) * PAGE_SIZE, groupPageSafe * PAGE_SIZE);
 
-  const selectedGroup = selection?.kind === "group" ? data.groups.find((group) => group.id === selection.id) ?? null : null;
   const selectedAccount = selection?.kind === "account" ? data.personas.find((persona) => persona.userId === selection.id) ?? null : null;
 
   const cap = data.settings.dailyCallBudget;
@@ -112,20 +130,61 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
     setEndHour(String(next.settings.activeEndHour));
   }
 
-  async function startRun(input: ManualRunRequest) {
+  async function createRun(input: { hubId: string; objective: string; groupIds: string[] }) {
     setBusy("run");
     try {
-      const { dashboard, tick } = await runConversationsOnce(input);
-      applyDashboard(dashboard);
-      const queued = tick.notes.find((note) => note.startsWith("Queued"));
-      if (tick.skipped === "budget") toast.message("Daily call cap reached.");
-      else if (tick.published > 0) toast.success(queued ? `Published ${tick.published}. ${queued}` : `Published ${tick.published}.`);
-      else toast.message(queued ?? tick.notes[0] ?? "Nothing was due.");
+      applyDashboard(await startRegionRun(input));
+      toast.success("Run started.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Run failed");
     } finally {
       setBusy(null);
     }
+  }
+
+  function accountIdsFromDrop(event: DragEvent<HTMLElement>) {
+    const raw = event.dataTransfer.getData("application/x-prop-accounts");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return [...new Set(parsed.map((id) => String(id).trim()).filter(Boolean))];
+    } catch {
+      return [];
+    }
+  }
+
+  function allowGroupDrop(event: DragEvent<HTMLElement>, groupId: string) {
+    if (!Array.from(event.dataTransfer.types).includes("application/x-prop-accounts")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropGroupId((current) => (current === groupId ? current : groupId));
+  }
+
+  async function dropAccountsOnGroup(event: DragEvent<HTMLElement>, group: ConversationGroup) {
+    event.preventDefault();
+    event.stopPropagation();
+    ignoreGroupClick.current = true;
+    window.setTimeout(() => {
+      ignoreGroupClick.current = false;
+    }, 0);
+    setDropGroupId(null);
+    const ids = accountIdsFromDrop(event);
+    if (ids.length === 0 || busy !== null) return;
+    const memberIds = new Set(group.members.map((member) => member.userId));
+    const adding = ids.filter((id) => !memberIds.has(id));
+    if (adding.length === 0) {
+      toast.message(ids.length === 1 ? "Already in this group." : "Those accounts are already in this group.");
+      return;
+    }
+    const names = adding.map((id) => data.personas.find((persona) => persona.userId === id)?.name ?? "Prop account");
+    await run(`add:${group.id}`, async () => {
+      const next = await addAccountsToGroup(group.id, adding);
+      toast.success(
+        adding.length === 1 ? `Added ${names[0]} to ${group.title}.` : `Added ${adding.length} accounts to ${group.title}.`,
+      );
+      return next;
+    });
   }
 
   async function run(key: string, work: () => Promise<ConversationDashboard>) {
@@ -169,6 +228,8 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
               </span>
             )}
           </button>
+          <div className="flex shrink-0 items-center gap-3">
+            <RunConversationDialog groups={data.groups} busy={busy !== null} onCreate={(input) => void createRun(input)} />
           <button
             type="button"
             role="switch"
@@ -176,7 +237,7 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
             aria-label="Automatic conversations"
             disabled={busy !== null}
             onClick={() => void run("switch", () => setConversationEnabled(!data.settings.enabled))}
-            className={`relative mt-1 h-8 w-14 shrink-0 rounded-full transition disabled:opacity-50 ${
+            className={`relative h-8 w-14 shrink-0 rounded-full transition disabled:opacity-50 ${
               data.settings.enabled ? "bg-cyan-400" : "bg-zinc-700"
             }`}
           >
@@ -186,6 +247,7 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
               }`}
             />
           </button>
+          </div>
         </div>
 
         {autopilotOpen ? (
@@ -304,21 +366,12 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
           </button>
           </div>
         </div>
-        <RunConversationDialog
-          groups={data.groups}
-          personas={data.personas}
-          autopilotOn={data.settings.enabled}
-          callsLeft={remaining}
-          busy={busy !== null}
-          onRun={(input) => void startRun(input)}
-        />
         </>
         ) : null}
       </section>
 
-      {data.activeRuns.length > 0 ? (
-        <ActiveRuns
-          runs={data.activeRuns}
+      <ActiveRuns
+          regions={data.regionRuns}
           personas={data.personas}
           settings={data.settings}
           used={used}
@@ -327,19 +380,55 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
           onRefresh={() => void run("refresh", () => refreshConversations())}
           onSendNow={(jobId) => void run(`send:${jobId}`, () => sendQueuedLineNow(jobId))}
           onSkip={(jobId) => void run(`skip:${jobId}`, () => skipQueuedLine(jobId))}
-          onSetAutomatic={(groupId, automatic, postsPerDay) =>
-            void run(`auto:${groupId}`, () => setGroupAutomatic(groupId, automatic, postsPerDay))
+          onEditLine={(jobId, body) => void run(`edit:${jobId}`, () => updateSentLine(jobId, body))}
+          onDeleteLine={(jobId) => void run(`delete:${jobId}`, () => removeSentLine(jobId))}
+          onSetAutomatic={(groupIds, automatic, postsPerDay) =>
+            void run("auto:region", () => setRegionAutomatic(groupIds, automatic, postsPerDay))
+          }
+          onSaveRules={(groupIds, rules) => void run("rules:region", () => saveRegionRules(groupIds, rules))}
+          onSaveSwear={(groupIds, swear, swearRate) =>
+            void run("swear:region", () => saveRegionSwear(groupIds, swear, swearRate))
+          }
+          onSaveGrammar={(groupIds, grammar) => void run("grammar:region", () => saveRegionGrammar(groupIds, grammar))}
+          onSaveAbbrev={(groupIds, abbrev) => void run("abbrev:region", () => saveRegionAbbrev(groupIds, abbrev))}
+          onSaveWeek={(groupIds, input) => void run("week:region", () => saveRegionWeek(groupIds, input))}
+          onAddToday={(groupIds) =>
+            void run("add-today", async () => {
+              const next = await addRegionPostsToday(groupIds);
+              toast.success(
+                groupIds.length === 1 ? "Added a post for today." : `Added a post for today in ${groupIds.length} groups.`,
+              );
+              return next;
+            })
+          }
+          onSaveObjective={(hubId, objective) => void run(`objective:${hubId}`, () => saveRegionObjectiveAction(hubId, objective))}
+          onToggleGroup={(groupId, included) => void run(`group:${groupId}`, () => setRegionGroupIncluded(groupId, included))}
+          onToggleAccount={(hubId, userId, included) =>
+            void run(`account:${userId}`, () => setRegionAccountIncluded(hubId, userId, included))
+          }
+          onSaveVoice={(userId, voice) => void run(`persona:${userId}`, () => savePropVoice(userId, voice))}
+          onPause={(hubId, paused) => void run(`pause:${hubId}`, () => setRegionRunPaused(hubId, paused))}
+          groups={data.groups}
+          onAddAccounts={(groupId, userIds) =>
+            void run(`add:${groupId}`, async () => {
+              const next = await addAccountsToGroup(groupId, userIds);
+              const title = data.groups.find((group) => group.id === groupId)?.title ?? "the group";
+              toast.success(userIds.length === 1 ? `Added 1 account to ${title}.` : `Added ${userIds.length} accounts to ${title}.`);
+              return next;
+            })
           }
         />
-      ) : null}
 
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-4">
           <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="px-1 font-mono text-[11px] uppercase tracking-[0.16em] text-cyan-300/70">
-                Groups · {railGroups.length}
-              </p>
+              <div className="px-1">
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-cyan-300/70">
+                  Groups · {railGroups.length}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">Drop a prop account on a group to add it.</p>
+              </div>
               <div className="w-full max-w-xs">
                 <input
                   className={inputCls}
@@ -352,17 +441,33 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
                 />
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
+            <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-3">
               {visibleGroups.map((group) => {
-                const selected = selection?.kind === "group" && selection.id === group.id;
+                const dropping = dropGroupId === group.id;
                 return (
-                  <button
+                  <div
                     key={group.id}
-                    type="button"
-                    onClick={() => setSelection({ kind: "group", id: group.id })}
-                    className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left ${
-                      selected
-                        ? "border-cyan-400/40 bg-cyan-400/10"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (ignoreGroupClick.current) return;
+                      router.push(`/dashboard/groups/${group.id}`);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      router.push(`/dashboard/groups/${group.id}`);
+                    }}
+                    onDragOver={(event) => allowGroupDrop(event, group.id)}
+                    onDragLeave={(event) => {
+                      const next = event.relatedTarget;
+                      if (next instanceof Node && event.currentTarget.contains(next)) return;
+                      setDropGroupId((current) => (current === group.id ? null : current));
+                    }}
+                    onDrop={(event) => void dropAccountsOnGroup(event, group)}
+                    className={`flex w-full cursor-pointer items-center gap-3 rounded-2xl border px-3 py-3 text-left ${
+                      dropping
+                        ? "border-cyan-400 bg-cyan-400/15"
                         : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700"
                     }`}
                   >
@@ -370,12 +475,12 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-zinc-100">{group.title}</span>
                       <span className="block truncate text-xs text-zinc-500">
-                        {group.hubTitle ? `${group.hubTitle} · ` : ""}
-                        {group.propMemberCount} {group.propMemberCount === 1 ? "account" : "accounts"}
-                        {group.enabled ? " · on" : ""}
+                        {dropping
+                          ? "Release to add"
+                          : `${group.hubTitle ? `${group.hubTitle} · ` : ""}${group.propMemberCount} ${group.propMemberCount === 1 ? "account" : "accounts"}${group.enabled ? " · on" : ""}`}
                       </span>
                     </span>
-                  </button>
+                  </div>
                 );
               })}
               {railGroups.length === 0 ? <p className="px-1 py-3 text-sm text-zinc-500">No groups match.</p> : null}
@@ -398,47 +503,13 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-6">
-          {selectedGroup ? (
-            <ActiveGroupCard
-              key={`${selectedGroup.id}:${selectedGroup.topic}:${selectedGroup.postsPerDay}:${selectedGroup.repliesPerPost}:${selectedGroup.enabled}`}
-              group={selectedGroup}
-              disabled={busy !== null}
-              onSave={(next) => run(`group:${selectedGroup.id}`, () => saveGroupConversation(next))}
-              onPause={() =>
-                run(`pause:${selectedGroup.id}`, () =>
-                  saveGroupConversation({
-                    groupId: selectedGroup.id,
-                    enabled: false,
-                    topic: selectedGroup.topic,
-                    postsPerDay: selectedGroup.postsPerDay,
-                    repliesPerPost: selectedGroup.repliesPerPost,
-                  }),
-                )
-              }
-              onQueuePost={(userId) => run(`queue:${selectedGroup.id}`, () => queueGroupPost(selectedGroup.id, userId))}
-              onPreview={async (userId) => {
-                setBusy(`preview:${selectedGroup.id}`);
-                try {
-                  const result = await previewConversationLine(selectedGroup.id, userId);
-                  applyDashboard(result.dashboard);
-                  if (result.error) toast.error(result.error);
-                  return result.text;
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : "Preview failed");
-                  return null;
-                } finally {
-                  setBusy(null);
-                }
-              }}
-            />
-          ) : null}
           {selectedAccount ? (
             <PersonaRow
-              key={`${selectedAccount.userId}:${selectedAccount.personality}`}
+              key={`${selectedAccount.userId}:${selectedAccount.personality}:${selectedAccount.swear}:${selectedAccount.swearRate}:${selectedAccount.grammar}:${selectedAccount.abbrev}:${selectedAccount.behavior}:${selectedAccount.traits.age ?? ""}:${selectedAccount.traits.temperament}:${selectedAccount.traits.talk}:${selectedAccount.traits.life}:${selectedAccount.traits.interests}`}
               persona={selectedAccount}
               disabled={busy !== null}
-              onSave={(personality) =>
-                run(`persona:${selectedAccount.userId}`, () => savePropPersonality(selectedAccount.userId, personality))
+              onSave={(voice) =>
+                run(`persona:${selectedAccount.userId}`, () => savePropVoice(selectedAccount.userId, voice))
               }
               onCopy={() =>
                 (async () => {
@@ -456,9 +527,9 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
               }
             />
           ) : null}
-          {!selectedGroup && !selectedAccount ? (
+          {!selectedAccount ? (
             <p className="rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-8 text-sm text-zinc-500">
-              Pick a group or a prop account.
+              Open a group for its content, members, settings, and analytics. Pick a prop account to set how it behaves.
             </p>
           ) : null}
 
@@ -544,7 +615,7 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
 }
 
 function ActiveRuns({
-  runs,
+  regions,
   personas,
   settings,
   used,
@@ -553,9 +624,24 @@ function ActiveRuns({
   onRefresh,
   onSendNow,
   onSkip,
+  onEditLine,
+  onDeleteLine,
   onSetAutomatic,
+  onSaveRules,
+  onSaveSwear,
+  onSaveGrammar,
+  onSaveAbbrev,
+  onSaveWeek,
+  onAddToday,
+  onSaveObjective,
+  onToggleGroup,
+  onToggleAccount,
+  onSaveVoice,
+  onPause,
+  groups,
+  onAddAccounts,
 }: {
-  runs: ConversationActiveRun[];
+  regions: RegionRun[];
   personas: ConversationPersona[];
   settings: ConversationSettings;
   used: number;
@@ -564,18 +650,36 @@ function ActiveRuns({
   onRefresh: () => void;
   onSendNow: (jobId: string) => void;
   onSkip: (jobId: string) => void;
-  onSetAutomatic: (groupId: string, automatic: boolean, postsPerDay: number) => void;
+  onEditLine: (jobId: string, body: string) => void;
+  onDeleteLine: (jobId: string) => void;
+  onSetAutomatic: (groupIds: string[], automatic: boolean, postsPerDay: number) => void;
+  onSaveRules: (groupIds: string[], rules: string[]) => void;
+  onSaveSwear: (groupIds: string[], swear: boolean, swearRate: SwearRate) => void;
+  onSaveGrammar: (groupIds: string[], grammar: number) => void;
+  onSaveAbbrev: (groupIds: string[], abbrev: number) => void;
+  onSaveWeek: (groupIds: string[], input: { days: number; startHour: number; endHour: number; everyMinutes: number; callsPerDay: number }) => void;
+  onAddToday: (groupIds: string[]) => void;
+  onSaveObjective: (hubId: string, objective: string) => void;
+  onToggleGroup: (groupId: string, included: boolean) => void;
+  onToggleAccount: (hubId: string, userId: string, included: boolean) => void;
+  onSaveVoice: (userId: string, voice: PropVoice) => void;
+  onPause: (hubId: string, paused: boolean) => void;
+  groups: ConversationGroup[];
+  onAddAccounts: (groupId: string, userIds: string[]) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const openRun = runs.find((run) => run.groupId === openId) ?? null;
+  const openRun = regions.find((run) => run.hubId === openId) ?? null;
+  const interacting = regions.filter((run) => run.interacting).length;
+  const quiet = regions.length - interacting;
 
   return (
     <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-cyan-300/80">In progress</p>
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-cyan-300/80">Runs</p>
           <p className="mt-1 text-sm text-zinc-500">
-            {runs.length} {runs.length === 1 ? "run" : "runs"} · open one for the full view
+            {settings.enabled ? "Live" : "Paused"}
+            {regions.length > 0 ? ` · ${interacting} interacting · ${quiet} quiet` : " · no regions with groups yet"}
           </p>
         </div>
         <button
@@ -587,47 +691,45 @@ function ActiveRuns({
           Refresh
         </button>
       </div>
-      <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
-        {runs.map((run) => {
-          const issueCount = runIssueCount(run, settings, used, cap);
-          const pct = run.total === 0 ? 0 : Math.round((run.sent / run.total) * 100);
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:overflow-x-auto sm:pb-1">
+        {regions.length === 0 ? <p className="px-1 py-3 text-sm text-zinc-500">Add prop accounts to a group to put its region in a run.</p> : null}
+        {regions.map((region) => {
+          const included = region.groups.filter((group) => group.included);
+          const issueCount = runIssueCount(region.snapshot, settings, used, cap);
+          const objective = region.objective.trim() || "No objective yet";
           return (
             <button
-              key={run.groupId}
+              key={region.hubId || "none"}
               type="button"
-              onClick={() => setOpenId(run.groupId)}
-              className="flex w-80 shrink-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4 text-left transition hover:border-cyan-400/40"
+              onClick={() => setOpenId(region.hubId)}
+              className="flex w-full shrink-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4 text-left transition hover:border-cyan-400/40 sm:w-80"
             >
               <span className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${run.waiting + run.running > 0 ? "bg-cyan-400" : "bg-zinc-600"}`} />
-                  <span className="truncate text-sm font-medium text-zinc-50">{run.groupTitle}</span>
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${region.interacting ? "bg-cyan-400" : "bg-zinc-600"}`} />
+                  <span className="truncate font-mono text-[11px] uppercase tracking-[0.14em] text-zinc-500">{region.title}</span>
                 </span>
-                {issueCount > 0 ? (
+                {region.paused ? (
+                  <span className="shrink-0 rounded-full border border-zinc-600 px-2 py-0.5 text-[11px] text-zinc-300">Paused</span>
+                ) : region.interacting ? (
+                  <span className="shrink-0 rounded-full border border-cyan-400/40 px-2 py-0.5 text-[11px] text-cyan-100">
+                    Interacting
+                  </span>
+                ) : issueCount > 0 ? (
                   <span className="shrink-0 rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] text-amber-100">
                     {issueCount} {issueCount === 1 ? "issue" : "issues"}
                   </span>
                 ) : (
-                  <span className="shrink-0 text-[11px] text-zinc-500">Clear</span>
+                  <span className="shrink-0 text-[11px] text-zinc-500">Quiet</span>
                 )}
               </span>
-              <span className="mt-5 flex items-end justify-between gap-3">
-                <span className="text-3xl font-semibold tabular-nums leading-none text-zinc-50">
-                  {run.sent}
-                  <span className="text-base font-normal text-zinc-500">/{run.total}</span>
-                </span>
-                <span className="text-right text-xs text-zinc-400">
-                  {run.autoContinue ? (
-                    <span className="mb-1 inline-block rounded-full border border-cyan-400/30 px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-cyan-100">
-                      Automatic
-                    </span>
-                  ) : null}
-                  <span className="block">{run.pace}</span>
-                  <span className="mt-1 block text-zinc-500">{run.nextAt ? formatWhen(run.nextAt) : "Nothing waiting"}</span>
-                </span>
+              <span className="mt-3 line-clamp-3 text-sm font-medium text-zinc-50">{objective}</span>
+              <span className="mt-3 line-clamp-2 text-xs text-zinc-400">
+                {included.length > 0 ? included.map((group) => group.title).join(" · ") : "No groups included"}
               </span>
-              <span className="mt-4 block h-1.5 overflow-hidden rounded-full bg-zinc-800">
-                <span className="block h-full rounded-full bg-cyan-400" style={{ width: `${pct}%` }} />
+              <span className="mt-3 text-xs text-zinc-500">
+                {included.length} {included.length === 1 ? "group" : "groups"} · {region.accounts.length}{" "}
+                {region.accounts.length === 1 ? "account" : "accounts"}
               </span>
             </button>
           );
@@ -635,7 +737,7 @@ function ActiveRuns({
       </div>
       {openRun ? (
         <RunScreen
-          run={openRun}
+          region={openRun}
           personas={personas}
           settings={settings}
           used={used}
@@ -644,7 +746,22 @@ function ActiveRuns({
           onRefresh={onRefresh}
           onSendNow={onSendNow}
           onSkip={onSkip}
+          onEditLine={onEditLine}
+          onDeleteLine={onDeleteLine}
           onSetAutomatic={onSetAutomatic}
+          onSaveRules={onSaveRules}
+          onSaveSwear={onSaveSwear}
+          onSaveGrammar={onSaveGrammar}
+          onSaveAbbrev={onSaveAbbrev}
+          onSaveWeek={onSaveWeek}
+          onAddToday={onAddToday}
+          onSaveObjective={onSaveObjective}
+          onToggleGroup={onToggleGroup}
+          onToggleAccount={onToggleAccount}
+          onSaveVoice={onSaveVoice}
+          onPause={onPause}
+          groups={groups}
+          onAddAccounts={onAddAccounts}
           onClose={() => setOpenId(null)}
         />
       ) : null}
@@ -676,14 +793,33 @@ function runIssues(run: ConversationActiveRun, settings: ConversationSettings, u
   ];
 }
 
-type LineFilter = "all" | "pending" | "done" | "failed";
+type LineFilter = "all" | "today" | "pending" | "done" | "failed";
 
 const LINE_FILTERS: Array<{ id: LineFilter; label: string }> = [
   { id: "all", label: "All" },
+  { id: "today", label: "Today" },
   { id: "pending", label: "Waiting" },
   { id: "done", label: "Sent" },
   { id: "failed", label: "Failed" },
 ];
+
+function isNyToday(iso: string): boolean {
+  return nyDateKey(new Date(iso)) === nyDateKey();
+}
+
+function isWaitingLine(status: ConversationActiveRun["lines"][number]["status"]): boolean {
+  return status === "pending" || status === "running";
+}
+
+function waitingDayLabel(iso: string): string {
+  if (isNyToday(iso)) return "Today";
+  return new Date(iso).toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
 
 function splitRunTopic(topic: string): { subject: string; tone: string | null; note: string | null } {
   const direction = TOPIC_DIRECTIONS.find((item) => topic.includes(item.line));
@@ -706,8 +842,88 @@ function minutesUntil(iso: string): string {
   return rest === 0 ? `in ${hours} h` : `in ${hours} h ${rest} min`;
 }
 
+type RunTab = "overview" | "groups" | "accounts" | "conversations" | "analytics" | "settings";
+
+const RUN_TABS: Array<{ id: RunTab; label: string }> = [
+  { id: "overview", label: "Overview" },
+  { id: "groups", label: "Groups" },
+  { id: "accounts", label: "Accounts" },
+  { id: "conversations", label: "Conversations" },
+  { id: "analytics", label: "Analytics" },
+  { id: "settings", label: "Settings" },
+];
+
+function nyHour(iso: string): number {
+  const part = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hourCycle: "h23" })
+    .formatToParts(new Date(iso))
+    .find((item) => item.type === "hour");
+  const hour = Number(part?.value ?? "0");
+  return Number.isFinite(hour) ? hour : 0;
+}
+
+function shortHour(hour: number): string {
+  if (hour === 0 || hour === 24) return "12a";
+  if (hour === 12) return "12p";
+  if (hour < 12) return `${hour}a`;
+  return `${hour - 12}p`;
+}
+
+function buildRunAnalytics(region: RegionRun) {
+  const lines = region.snapshot.lines.filter((line) => line.status !== "skipped");
+  const sentLines = lines.filter((line) => line.status === "done");
+  const included = region.accounts.filter((account) => account.included);
+  const jumped = included.filter((account) => account.moment?.decision === "jumped_in").length;
+  const stayed = included.filter((account) => account.moment?.decision === "stayed_out").length;
+  const byGroup = new Map<string, { title: string; sent: number; waiting: number; waitingLater: number; failed: number }>();
+  for (const group of region.groups) {
+    if (!group.included) continue;
+    byGroup.set(group.title, { title: group.title, sent: 0, waiting: 0, waitingLater: 0, failed: 0 });
+  }
+  for (const line of lines) {
+    const title = line.groupTitle || "Group";
+    const row = byGroup.get(title) ?? { title, sent: 0, waiting: 0, waitingLater: 0, failed: 0 };
+    if (line.status === "done") row.sent += 1;
+    else if (line.status === "failed") row.failed += 1;
+    else if (line.status === "pending" || line.status === "running") {
+      if (isNyToday(line.runAt)) row.waiting += 1;
+      else row.waitingLater += 1;
+    }
+    byGroup.set(title, row);
+  }
+  const byAccount = new Map<string, { id: string; name: string; sent: number }>();
+  for (const line of sentLines) {
+    const row = byAccount.get(line.authorId) ?? { id: line.authorId, name: line.authorName, sent: 0 };
+    row.sent += 1;
+    byAccount.set(line.authorId, row);
+  }
+  const hourCounts = Array.from({ length: 24 }, () => 0);
+  for (const line of sentLines) hourCounts[nyHour(line.runAt)] += 1;
+  const activeHours = hourCounts.map((sent, hour) => ({ hour, sent })).filter((item) => item.sent > 0);
+  const first = activeHours[0]?.hour ?? 0;
+  const last = activeHours.at(-1)?.hour ?? first;
+  const hours =
+    activeHours.length === 0
+      ? []
+      : hourCounts.slice(first, last + 1).map((sent, index) => ({ hour: first + index, label: shortHour(first + index), sent }));
+  return {
+    sent: sentLines.length,
+    posts: sentLines.filter((line) => line.kind === "start_post").length,
+    replies: sentLines.filter((line) => line.kind === "reply").length,
+    failed: lines.filter((line) => line.status === "failed").length,
+    waiting: lines.filter((line) => (line.status === "pending" || line.status === "running") && isNyToday(line.runAt)).length,
+    waitingLater: lines.filter((line) => (line.status === "pending" || line.status === "running") && !isNyToday(line.runAt)).length,
+    jumped,
+    stayed,
+    undecided: included.length - jumped - stayed,
+    included: included.length,
+    groups: [...byGroup.values()].sort((a, b) => b.sent - a.sent || a.title.localeCompare(b.title)),
+    speakers: [...byAccount.values()].sort((a, b) => b.sent - a.sent || a.name.localeCompare(b.name)).slice(0, 8),
+    hours,
+  };
+}
+
 function RunScreen({
-  run,
+  region,
   personas,
   settings,
   used,
@@ -716,10 +932,25 @@ function RunScreen({
   onRefresh,
   onSendNow,
   onSkip,
+  onEditLine,
+  onDeleteLine,
   onSetAutomatic,
+  onSaveRules,
+  onSaveSwear,
+  onSaveGrammar,
+  onSaveAbbrev,
+  onSaveWeek,
+  onAddToday,
+  onSaveObjective,
+  onToggleGroup,
+  onToggleAccount,
+  onSaveVoice,
+  onPause,
+  groups,
+  onAddAccounts,
   onClose,
 }: {
-  run: ConversationActiveRun;
+  region: RegionRun;
   personas: ConversationPersona[];
   settings: ConversationSettings;
   used: number;
@@ -728,13 +959,96 @@ function RunScreen({
   onRefresh: () => void;
   onSendNow: (jobId: string) => void;
   onSkip: (jobId: string) => void;
-  onSetAutomatic: (groupId: string, automatic: boolean, postsPerDay: number) => void;
+  onEditLine: (jobId: string, body: string) => void;
+  onDeleteLine: (jobId: string) => void;
+  onSetAutomatic: (groupIds: string[], automatic: boolean, postsPerDay: number) => void;
+  onSaveRules: (groupIds: string[], rules: string[]) => void;
+  onSaveSwear: (groupIds: string[], swear: boolean, swearRate: SwearRate) => void;
+  onSaveGrammar: (groupIds: string[], grammar: number) => void;
+  onSaveAbbrev: (groupIds: string[], abbrev: number) => void;
+  onSaveWeek: (groupIds: string[], input: { days: number; startHour: number; endHour: number; everyMinutes: number; callsPerDay: number }) => void;
+  onAddToday: (groupIds: string[]) => void;
+  onSaveObjective: (hubId: string, objective: string) => void;
+  onToggleGroup: (groupId: string, included: boolean) => void;
+  onToggleAccount: (hubId: string, userId: string, included: boolean) => void;
+  onSaveVoice: (userId: string, voice: PropVoice) => void;
+  onPause: (hubId: string, paused: boolean) => void;
+  groups: ConversationGroup[];
+  onAddAccounts: (groupId: string, userIds: string[]) => void;
   onClose: () => void;
 }) {
+  const run = region.snapshot;
+  const includedIds = region.groups.filter((group) => group.included).map((group) => group.groupId);
   const [filter, setFilter] = useState<LineFilter>("all");
+  const [rules, setRules] = useState(() => editableRunRules(run.rules));
+  const [noHyphens, setNoHyphens] = useState(() => forbidsHyphens(run.rules));
+  const [advanced, setAdvanced] = useState(false);
+  const [swear, setSwear] = useState(run.swear);
+  const [swearRate, setSwearRate] = useState<SwearRate>(run.swearRate);
+  const [grammar, setGrammar] = useState(run.grammar);
+  const [abbrev, setAbbrev] = useState(run.abbrev);
+  const [weekOn, setWeekOn] = useState(run.weekDays > 0);
+  const [weekDays, setWeekDays] = useState(run.weekDays > 0 ? run.weekDays : 127);
+  const [weekStart, setWeekStart] = useState(run.weekStartHour);
+  const [weekEnd, setWeekEnd] = useState(run.weekEndHour);
+  const [weekEveryHours, setWeekEveryHours] = useState(Math.max(1, Math.round(run.weekEveryMinutes / 60)));
+  const [callsPerDay, setCallsPerDay] = useState(run.callsPerDay);
+  const savedRules = run.rules.join("\n");
   const [postsPerDay, setPostsPerDay] = useState(String(Math.max(1, run.postsPerDay || 4)));
   const postsPerDayValue = Math.min(20, Math.max(1, Number(postsPerDay) || 1));
   const [mounted, setMounted] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [objective, setObjective] = useState(region.objective);
+  const [openVoiceId, setOpenVoiceId] = useState<string | null>(null);
+  const [tab, setTab] = useState<RunTab>("overview");
+  const [rosterGroupId, setRosterGroupId] = useState("");
+  const [rosterFocus, setRosterFocus] = useState<string | null>(null);
+  const [addMode, setAddMode] = useState<"one" | "bulk" | null>(null);
+  const [addQuery, setAddQuery] = useState("");
+  const [bulkIds, setBulkIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setObjective(region.objective);
+  }, [region.hubId, region.objective]);
+
+  useEffect(() => {
+    setTab("overview");
+    setRosterGroupId("");
+    setRosterFocus(null);
+    setAddMode(null);
+    setAddQuery("");
+    setBulkIds([]);
+  }, [region.hubId]);
+
+  useEffect(() => {
+    const parsed = savedRules.length > 0 ? savedRules.split("\n") : [];
+    setRules(editableRunRules(parsed));
+    setNoHyphens(forbidsHyphens(parsed));
+  }, [run.groupId, savedRules]);
+
+  useEffect(() => {
+    setSwear(run.swear);
+    setSwearRate(run.swearRate);
+  }, [run.groupId, run.swear, run.swearRate]);
+
+  useEffect(() => {
+    setGrammar(run.grammar);
+  }, [run.groupId, run.grammar]);
+
+  useEffect(() => {
+    setAbbrev(run.abbrev);
+  }, [run.groupId, run.abbrev]);
+
+  useEffect(() => {
+    setWeekOn(run.weekDays > 0);
+    setWeekDays(run.weekDays > 0 ? run.weekDays : 127);
+    setWeekStart(run.weekStartHour);
+    setWeekEnd(run.weekEndHour);
+    setWeekEveryHours(Math.max(1, Math.round(run.weekEveryMinutes / 60)));
+    setCallsPerDay(run.callsPerDay);
+  }, [run.groupId, run.weekDays, run.weekStartHour, run.weekEndHour, run.weekEveryMinutes, run.callsPerDay]);
 
   useEffect(() => {
     setMounted(true);
@@ -747,11 +1061,17 @@ function RunScreen({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (editingId) {
+        setEditingId(null);
+        setConfirmDelete(false);
+        return;
+      }
+      onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [editingId, onClose]);
 
   const personaById = useMemo(() => new Map(personas.map((persona) => [persona.userId, persona])), [personas]);
   const issues = runIssues(run, settings, used, cap);
@@ -763,20 +1083,64 @@ function RunScreen({
       ? { label: "Needs attention", dot: "bg-amber-300", text: "text-amber-100", ring: "border-amber-300/40" }
       : hasWork
         ? { label: "Running", dot: "bg-cyan-400", text: "text-cyan-100", ring: "border-cyan-400/40" }
-        : { label: "Finished", dot: "bg-emerald-400", text: "text-emerald-100", ring: "border-emerald-400/40" };
+        : { label: "Done", dot: "bg-emerald-400", text: "text-emerald-100", ring: "border-emerald-400/40" };
 
-  const pctOf = (count: number) => (run.total === 0 ? 0 : (count / run.total) * 100);
   const counts: Record<LineFilter, number> = {
     all: run.lines.length,
-    pending: run.lines.filter((line) => line.status === "pending" || line.status === "running").length,
+    today: run.lines.filter((line) => isWaitingLine(line.status) && isNyToday(line.runAt)).length,
+    pending: run.lines.filter((line) => isWaitingLine(line.status)).length,
     done: run.sent,
     failed: run.failed,
   };
   const visibleLines = run.lines.filter((line) => {
     if (filter === "all") return true;
-    if (filter === "pending") return line.status === "pending" || line.status === "running";
+    if (filter === "today") return isWaitingLine(line.status) && isNyToday(line.runAt);
+    if (filter === "pending") return isWaitingLine(line.status);
     return line.status === filter;
   });
+  const includedGroupOptions = region.groups.filter((group) => group.included);
+  const rosterGroup =
+    groups.find((group) => group.id === rosterGroupId) ??
+    groups.find((group) => group.id === includedGroupOptions[0]?.groupId) ??
+    null;
+  const rosterMembers = rosterGroup?.members ?? [];
+  const rosterMemberIds = new Set(rosterMembers.map((member) => member.userId));
+  const addQueryText = addQuery.trim().toLowerCase();
+  const addCandidates = personas.filter((persona) => {
+    if (rosterMemberIds.has(persona.userId)) return false;
+    if (!addQueryText) return true;
+    return persona.name.toLowerCase().includes(addQueryText) || (persona.username ?? "").toLowerCase().includes(addQueryText);
+  });
+  const conversationLines = visibleLines.filter((line) => {
+    if (!rosterFocus) return true;
+    if (line.authorId !== rosterFocus) return false;
+    return !rosterGroup || line.groupTitle === rosterGroup.title;
+  });
+  const orderedConversationLines =
+    filter === "pending" || filter === "today"
+      ? [...conversationLines].sort((a, b) => a.runAt.localeCompare(b.runAt))
+      : conversationLines;
+
+  useEffect(() => {
+    if (!rosterFocus) return;
+    document.getElementById(`run-roster-${rosterFocus}`)?.scrollIntoView({ block: "nearest" });
+  }, [rosterFocus]);
+  const includedAccounts = region.accounts.filter((account) => account.included);
+  const conversationSnippets = [...run.lines]
+    .filter((line) => line.body.trim() && line.status !== "skipped")
+    .sort((a, b) => b.runAt.localeCompare(a.runAt))
+    .slice(0, 4);
+  const liveLines = [...run.lines]
+    .filter((line) => line.status !== "skipped")
+    .sort((a, b) => {
+      const rank = (status: typeof a.status) => (status === "running" ? 0 : status === "pending" ? 1 : status === "failed" ? 2 : 3);
+      const diff = rank(a.status) - rank(b.status);
+      if (diff !== 0) return diff;
+      return a.status === "pending" || a.status === "running" ? a.runAt.localeCompare(b.runAt) : b.runAt.localeCompare(a.runAt);
+    })
+    .slice(0, 12);
+  const overviewAnalytics = buildRunAnalytics(region);
+  const overviewHourMax = Math.max(1, ...overviewAnalytics.hours.map((hour) => hour.sent));
   const capPct = cap === 0 ? 100 : Math.min(100, Math.round((used / cap) * 100));
 
   if (!mounted) return null;
@@ -787,7 +1151,7 @@ function RunScreen({
       style={{ backgroundColor: "#06090e" }}
       role="dialog"
       aria-modal="true"
-      aria-label={run.groupTitle}
+      aria-label={region.objective.trim() || "No objective yet"}
     >
       <main className="flex h-full flex-col bg-[#06090e]">
         <header className="flex shrink-0 items-center gap-4 border-b border-zinc-800 bg-[#06090e] px-4 py-3 sm:px-8">
@@ -800,8 +1164,10 @@ function RunScreen({
             Back
           </button>
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-300/80">Run in progress</p>
-            <h2 className="truncate text-base font-semibold text-zinc-50 sm:text-lg">{run.groupTitle}</h2>
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-300/80">
+              {region.title} · {region.paused ? "Paused" : region.interacting ? "Interacting" : "Quiet"}
+            </p>
+            <h2 className="truncate text-base font-semibold text-zinc-50 sm:text-lg">{region.objective.trim() || "No objective yet"}</h2>
           </div>
           <span className={`hidden items-center gap-2 rounded-full border px-3 py-1 text-xs sm:flex ${status.ring} ${status.text}`}>
             <span className={`h-2 w-2 rounded-full ${status.dot} ${hasWork && issues.length === 0 ? "animate-pulse" : ""}`} />
@@ -818,43 +1184,172 @@ function RunScreen({
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-6 sm:px-8">
-          <div className="mx-auto flex max-w-7xl flex-col gap-6">
-            <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <StatTile label="Sent" value={String(run.sent)} sub={`of ${run.total} lines`} accent="text-cyan-100" />
-                <StatTile
-                  label="Waiting"
-                  value={String(run.waiting + run.running)}
-                  sub={run.running > 0 ? `${run.running} sending now` : "scheduled"}
-                />
-                <StatTile
-                  label="Failed"
-                  value={String(run.failed)}
-                  sub={run.failed > 0 ? "see the list below" : "none so far"}
-                  accent={run.failed > 0 ? "text-amber-100" : undefined}
-                />
-                <StatTile
-                  label="Next line"
-                  value={run.nextAt ? formatWhen(run.nextAt).split(", ").pop() ?? "" : "None"}
-                  sub={run.nextAt ? minutesUntil(run.nextAt) : "nothing scheduled"}
-                />
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          <nav aria-label="Run sections" className="flex shrink-0 gap-1 overflow-x-auto border-b border-zinc-800 bg-[#06090e] px-3 py-2 md:w-56 md:flex-col md:overflow-y-auto md:border-b-0 md:border-r md:px-3 md:py-4">
+            {RUN_TABS.map((item) => {
+              const selected = tab === item.id;
+              const count =
+                item.id === "groups"
+                  ? region.groups.filter((group) => group.included).length
+                  : item.id === "accounts"
+                    ? region.accounts.filter((account) => account.included).length
+                    : item.id === "conversations"
+                      ? run.lines.length
+                      : item.id === "analytics"
+                        ? run.sent
+                        : null;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={selected ? "page" : undefined}
+                  onClick={() => setTab(item.id)}
+                  className={`flex shrink-0 items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm md:w-full ${
+                    selected ? "bg-cyan-400/15 text-cyan-100" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  {count != null ? <span className="text-xs tabular-nums text-zinc-500">{count}</span> : null}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-6 sm:px-8">
+          <div className={`mx-auto flex flex-col gap-6 ${tab === "overview" || tab === "conversations" ? "max-w-6xl" : "max-w-5xl"}`}>
+            {tab === "overview" ? (
+            <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="flex min-w-0 flex-col gap-6">
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-50">{region.paused ? "Paused" : "Running"}</h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {region.paused ? "Nothing new goes out until you resume." : "This run can post and reply."}
+                </p>
               </div>
-              <div className="mt-5">
-                <div className="flex h-2.5 overflow-hidden rounded-full bg-zinc-800">
-                  <div className="h-full bg-cyan-400" style={{ width: `${pctOf(run.sent)}%` }} />
-                  <div className="h-full bg-cyan-200/70" style={{ width: `${pctOf(run.running)}%` }} />
-                  <div className="h-full bg-amber-300" style={{ width: `${pctOf(run.failed)}%` }} />
-                </div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
-                  <Legend dot="bg-cyan-400" label={`Sent ${run.sent}`} />
-                  {run.running > 0 ? <Legend dot="bg-cyan-200/70" label={`Sending ${run.running}`} /> : null}
-                  {run.failed > 0 ? <Legend dot="bg-amber-300" label={`Failed ${run.failed}`} /> : null}
-                  <Legend dot="bg-zinc-700" label={`Waiting ${run.waiting}`} />
-                </div>
-              </div>
+              <button
+                type="button"
+                disabled={busy || !region.hubId}
+                onClick={() => onPause(region.hubId, !region.paused)}
+                className={`rounded-xl px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+                  region.paused ? "bg-cyan-400 text-zinc-950" : "border border-zinc-600 text-zinc-100"
+                }`}
+              >
+                {region.paused ? "Resume" : "Pause"}
+              </button>
             </section>
-
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-zinc-50">Analytics</h3>
+                <button type="button" onClick={() => setTab("analytics")} className="text-xs text-cyan-200">
+                  Open
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div>
+                  <p className="text-xs text-zinc-500">Sent</p>
+                  <p className="mt-1 text-xl font-semibold tabular-nums text-zinc-50">{overviewAnalytics.sent}</p>
+                  <p className="mt-0.5 text-[11px] text-zinc-500">
+                    {overviewAnalytics.posts} posts · {overviewAnalytics.replies} replies
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Waiting today</p>
+                  <p className="mt-1 text-xl font-semibold tabular-nums text-zinc-50">{overviewAnalytics.waiting}</p>
+                  <p className="mt-0.5 text-[11px] text-zinc-500">
+                    {overviewAnalytics.waitingLater > 0
+                      ? `${overviewAnalytics.waitingLater} later this week`
+                      : "scheduled or sending"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Failed</p>
+                  <p className="mt-1 text-xl font-semibold tabular-nums text-zinc-50">{overviewAnalytics.failed}</p>
+                  <p className="mt-0.5 text-[11px] text-zinc-500">{overviewAnalytics.failed > 0 ? "see Conversations" : "none so far"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Jumped in</p>
+                  <p className="mt-1 text-xl font-semibold tabular-nums text-zinc-50">{overviewAnalytics.jumped}</p>
+                  <p className="mt-0.5 text-[11px] text-zinc-500">
+                    {overviewAnalytics.included === 0 ? "no accounts included" : `of ${overviewAnalytics.included} included`}
+                  </p>
+                </div>
+              </div>
+              {overviewAnalytics.hours.length > 0 ? (
+                <div className="mt-4 flex h-8 items-end gap-0.5" aria-hidden>
+                  {overviewAnalytics.hours.map((hour) => (
+                    <div key={hour.hour} className="flex h-full min-w-0 flex-1 items-end">
+                      <div
+                        className={`w-full rounded-sm ${hour.sent === 0 ? "bg-zinc-800" : "bg-cyan-400"}`}
+                        style={{ height: `${hour.sent === 0 ? 12 : Math.max(20, (hour.sent / overviewHourMax) * 100)}%` }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-4 text-xs text-zinc-500">Nothing sent yet today.</p>
+              )}
+            </section>
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-50">Live activity</h3>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {run.running > 0
+                      ? `${run.running} sending now`
+                      : run.waiting > 0
+                        ? `${counts.today} waiting today${run.waiting > counts.today ? ` · ${run.waiting - counts.today} later` : ""}`
+                        : run.sent > 0
+                          ? `${run.sent} sent`
+                          : "Quiet right now"}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setTab("conversations")} className="text-xs text-cyan-200">
+                  Open
+                </button>
+              </div>
+              {liveLines.length === 0 ? (
+                <p className="mt-6 rounded-2xl border border-dashed border-zinc-800 px-4 py-10 text-center text-sm text-zinc-500">
+                  Nothing happening yet.
+                </p>
+              ) : (
+                <ol className="mt-4 flex flex-col gap-3">
+                  {liveLines.map((line) => {
+                    const persona = personaById.get(line.authorId);
+                    const waiting = line.status === "pending";
+                    return (
+                      <li
+                        key={line.id}
+                        className={`flex gap-3 rounded-2xl border px-3 py-3 ${
+                          line.status === "failed" ? "border-amber-300/30" : "border-zinc-800"
+                        } ${line.kind === "reply" ? "ml-4" : ""}`}
+                      >
+                        <PersonaAvatar name={line.authorName} avatarUrl={persona?.avatarUrl ?? null} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-sm font-medium text-zinc-100">{line.authorName}</span>
+                            {line.groupTitle ? <span className="truncate text-xs text-zinc-500">{line.groupTitle}</span> : null}
+                            <span className="rounded-md border border-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                              {line.kind === "reply" ? "Reply" : "Post"}
+                            </span>
+                            <LineBadge status={line.status} />
+                            <span className="ml-auto text-xs text-zinc-500">
+                              {formatWhen(line.runAt)}
+                              {waiting ? ` · ${minutesUntil(line.runAt)}` : ""}
+                            </span>
+                          </div>
+                          {line.body.trim() ? (
+                            <p className="mt-1.5 text-sm leading-6 text-zinc-300">{line.body}</p>
+                          ) : (
+                            <p className="mt-1.5 text-sm italic text-zinc-500">Waiting to be written.</p>
+                          )}
+                          {line.status === "failed" && line.error ? <p className="mt-1 text-xs text-amber-200/90">{line.error}</p> : null}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </section>
             {issues.length > 0 ? (
               <section className="rounded-3xl border border-amber-300/30 bg-amber-300/[0.06] p-5">
                 <div className="flex items-center gap-2">
@@ -870,12 +1365,183 @@ function RunScreen({
                 </ul>
               </section>
             ) : null}
+            </div>
+            <aside className="xl:sticky xl:top-0">
+              <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-zinc-50">Accounts</h3>
+                  <button type="button" onClick={() => setTab("accounts")} className="text-xs text-cyan-200">
+                    {includedAccounts.length}
+                  </button>
+                </div>
+                {includedAccounts.length === 0 ? (
+                  <p className="mt-3 text-sm text-zinc-500">No accounts included.</p>
+                ) : (
+                  <ul className="mt-3 flex flex-col gap-3">
+                    {includedAccounts.slice(0, 8).map((account) => {
+                      const persona = personaById.get(account.userId);
+                      return (
+                        <li key={account.userId} className="flex items-center gap-2">
+                          <PersonaAvatar name={account.name} avatarUrl={persona?.avatarUrl ?? null} size="sm" />
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-zinc-100">{account.name}</p>
+                            <p className="truncate text-xs text-zinc-500">
+                              {account.moment?.decision === "jumped_in"
+                                ? "Jumped in"
+                                : account.moment?.decision === "stayed_out"
+                                  ? "Stayed out"
+                                  : account.pace}
+                              {account.lastSpokeAt ? ` · ${formatWhen(account.lastSpokeAt)}` : ""}
+                            </p>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {includedAccounts.length > 8 ? (
+                  <button type="button" onClick={() => setTab("accounts")} className="mt-3 text-xs text-cyan-200">
+                    See all {includedAccounts.length}
+                  </button>
+                ) : null}
+                <div className="mt-5 border-t border-zinc-800 pt-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-zinc-50">Conversations</h3>
+                    <button type="button" onClick={() => setTab("conversations")} className="text-xs text-cyan-200">
+                      Open
+                    </button>
+                  </div>
+                  {conversationSnippets.length === 0 ? (
+                    <p className="mt-3 text-sm text-zinc-500">No conversation yet.</p>
+                  ) : (
+                    <ul className="mt-3 flex flex-col gap-4">
+                      {conversationSnippets.map((line) => (
+                        <li key={line.id}>
+                          <button type="button" onClick={() => setTab("conversations")} className="w-full text-left">
+                            <p className="truncate text-xs text-zinc-500">
+                              <span className="text-zinc-200">{line.authorName}</span>
+                              {line.groupTitle ? ` · ${line.groupTitle}` : ""}
+                            </p>
+                            <p className="mt-1 line-clamp-3 text-sm leading-5 text-zinc-300">{line.body}</p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </aside>
+            </div>
+            ) : null}
+            {tab === "groups" ? (
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+              <h3 className="text-sm font-semibold text-zinc-50">Groups</h3>
+              <p className="mt-1 text-xs text-zinc-500">Included groups take part in this run. Settings apply to every included group.</p>
+              <ul className="mt-4 flex flex-col gap-2">
+                {region.groups.map((group) => (
+                  <li key={group.groupId} className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-800 px-3 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-zinc-100">{group.title}</p>
+                      <p className="text-xs text-zinc-500">
+                        {group.interacting ? "Interacting" : "Quiet"} · {group.propMemberCount}{" "}
+                        {group.propMemberCount === 1 ? "account" : "accounts"}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onToggleGroup(group.groupId, !group.included)}
+                      className={`shrink-0 rounded-full border px-3 py-1 text-xs ${
+                        group.included ? "border-cyan-400/40 text-cyan-100" : "border-zinc-700 text-zinc-400"
+                      }`}
+                    >
+                      {group.included ? "Included" : "Left out"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            ) : null}
+            {tab === "accounts" ? (
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+              <h3 className="text-sm font-semibold text-zinc-50">Prop accounts</h3>
+              <p className="mt-1 text-xs text-zinc-500">Include or leave out each account, and set how that account behaves.</p>
+              {region.accounts.length === 0 ? <p className="mt-3 text-sm text-zinc-500">No prop accounts in these groups.</p> : null}
+              <ul className="mt-4 flex flex-col gap-2">
+                {region.accounts.map((account) => {
+                  const persona = personaById.get(account.userId);
+                  const open = openVoiceId === account.userId;
+                  return (
+                    <li key={account.userId} className="rounded-2xl border border-zinc-800 px-3 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-zinc-100">{account.name}</p>
+                          <p className="mt-1 text-xs text-zinc-500">{account.groupTitles.join(" · ")}</p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busy || !region.hubId}
+                          onClick={() => onToggleAccount(region.hubId, account.userId, !account.included)}
+                          className={`shrink-0 rounded-full border px-3 py-1 text-xs ${
+                            account.included ? "border-cyan-400/40 text-cyan-100" : "border-zinc-700 text-zinc-400"
+                          }`}
+                        >
+                          {account.included ? "Included" : "Left out"}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-xs text-cyan-200/90">
+                        {account.moment?.decision === "jumped_in"
+                          ? "Jumped in"
+                          : account.moment?.decision === "stayed_out"
+                            ? "Stayed out"
+                            : "No decision yet"}
+                      </p>
+                      {account.moment?.subject ? <p className="mt-1 text-sm text-zinc-300">{account.moment.subject}</p> : null}
+                      <p className="mt-1 text-xs text-zinc-500">
+                        {account.pace}
+                        {account.lastSpokeAt ? ` · last spoke ${formatWhen(account.lastSpokeAt)}` : " · has not spoken today"}
+                        {persona?.personality.trim() ? ` · ${persona.personality.trim()}` : ""}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setOpenVoiceId(open ? null : account.userId)}
+                        className="mt-2 text-xs text-cyan-200/90"
+                      >
+                        {open ? "Hide personality" : "Personality"}
+                      </button>
+                      {open && persona ? (
+                        <AccountVoice
+                          persona={persona}
+                          disabled={busy}
+                          onSave={(voice) => onSaveVoice(account.userId, voice)}
+                        />
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+            ) : null}
 
-            <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+            {tab === "conversations" ? (
+              <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_18rem]">
               <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="text-sm font-semibold text-zinc-50">Conversation</h3>
-                  <div className="flex rounded-xl border border-zinc-800 p-0.5">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h3 className="text-sm font-semibold text-zinc-50">Conversations</h3>
+                    <button
+                      type="button"
+                      disabled={busy || region.paused || includedIds.length === 0}
+                      onClick={() => {
+                        setFilter("today");
+                        onAddToday(includedIds);
+                      }}
+                      className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-50"
+                    >
+                      Add a post today
+                    </button>
+                  </div>
+                  <div className="flex w-full flex-wrap rounded-xl border border-zinc-800 p-0.5 sm:w-auto">
                     {LINE_FILTERS.map((item) => (
                       <button
                         key={item.id}
@@ -892,18 +1558,44 @@ function RunScreen({
                   </div>
                 </div>
 
-                {visibleLines.length === 0 ? (
+                {orderedConversationLines.length === 0 ? (
                   <p className="mt-6 rounded-2xl border border-dashed border-zinc-800 px-4 py-10 text-center text-sm text-zinc-500">
-                    Nothing here.
+                    {rosterFocus
+                      ? "This account has no lines in this conversation."
+                      : filter === "today"
+                        ? "Nothing waiting today."
+                        : filter === "pending"
+                          ? "Nothing waiting this week."
+                          : "Nothing here."}
                   </p>
                 ) : (
                   <ol className="mt-4 flex flex-col gap-3">
-                    {visibleLines.map((line) => {
+                    {filter === "pending" &&
+                    orderedConversationLines.some((line) => isNyToday(line.runAt)) &&
+                    orderedConversationLines.some((line) => !isNyToday(line.runAt)) ? (
+                      <li className="text-xs text-zinc-500">Today is first. Later days are the rest of this week.</li>
+                    ) : null}
+                    {orderedConversationLines.map((line, index) => {
                       const persona = personaById.get(line.authorId);
                       const waiting = line.status === "pending";
+                      const removed = line.status === "skipped" && line.error === "Removed";
+                      const day = filter === "pending" ? nyDateKey(new Date(line.runAt)) : null;
+                      const previousDay =
+                        filter === "pending" && index > 0
+                          ? nyDateKey(new Date(orderedConversationLines[index - 1].runAt))
+                          : null;
+                      const dayLabel = day && day !== previousDay ? waitingDayLabel(line.runAt) : null;
                       return (
+                        <Fragment key={line.id}>
+                          {dayLabel ? (
+                            <li className="pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                              {dayLabel}
+                              <span className="ml-2 tabular-nums font-normal normal-case tracking-normal text-zinc-500">
+                                {orderedConversationLines.filter((item) => nyDateKey(new Date(item.runAt)) === day).length}
+                              </span>
+                            </li>
+                          ) : null}
                         <li
-                          key={line.id}
                           className={`flex gap-3 rounded-2xl border px-4 py-3 ${
                             line.status === "failed" ? "border-amber-300/30" : "border-zinc-800"
                           } ${line.kind === "reply" ? "sm:ml-8" : ""}`}
@@ -912,6 +1604,7 @@ function RunScreen({
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                               <span className="text-sm font-medium text-zinc-100">{line.authorName}</span>
+                              {line.groupTitle ? <span className="text-xs text-zinc-500">{line.groupTitle}</span> : null}
                               <span className="rounded-md border border-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-zinc-400">
                                 {line.kind === "reply" ? "Reply" : "Post"}
                               </span>
@@ -921,14 +1614,92 @@ function RunScreen({
                                 {waiting ? ` · ${minutesUntil(line.runAt)}` : ""}
                               </span>
                             </div>
-                            {line.body ? (
-                              <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-zinc-100">{line.body}</p>
+                            {removed ? (
+                              <p className="mt-1.5 text-sm italic text-zinc-500">Deleted from the group.</p>
+                            ) : editingId === line.id ? (
+                              <form
+                                className="mt-2"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  onEditLine(line.id, draft);
+                                  setEditingId(null);
+                                  setConfirmDelete(false);
+                                }}
+                              >
+                                <textarea
+                                  value={draft}
+                                  onChange={(event) => setDraft(event.target.value)}
+                                  rows={3}
+                                  className="w-full resize-y rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none focus:border-cyan-400"
+                                />
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <button
+                                    type="submit"
+                                    disabled={busy || !draft.trim()}
+                                    className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-50"
+                                  >
+                                    Update
+                                  </button>
+                                  {confirmDelete ? (
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => {
+                                        onDeleteLine(line.id);
+                                        setEditingId(null);
+                                        setConfirmDelete(false);
+                                      }}
+                                      className="rounded-xl border border-rose-400/40 px-3 py-1.5 text-xs text-rose-100 disabled:opacity-50"
+                                    >
+                                      Confirm delete
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => setConfirmDelete(true)}
+                                      className="rounded-xl border border-rose-400/40 px-3 py-1.5 text-xs text-rose-100 disabled:opacity-50"
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setEditingId(null);
+                                      setConfirmDelete(false);
+                                    }}
+                                    className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 disabled:opacity-50"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </form>
+                            ) : line.body ? (
+                              <>
+                                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-zinc-100">{line.body}</p>
+                                {line.status === "done" ? (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setEditingId(line.id);
+                                      setDraft(line.body);
+                                      setConfirmDelete(false);
+                                    }}
+                                    className="mt-2 rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 disabled:opacity-50"
+                                  >
+                                    Edit
+                                  </button>
+                                ) : null}
+                              </>
                             ) : (
                               <p className="mt-1.5 text-sm italic text-zinc-500">
                                 {line.status === "failed" ? "Nothing was published." : "Written when it sends."}
                               </p>
                             )}
-                            {line.error ? <p className="mt-1.5 text-xs text-amber-200/90">{line.error}</p> : null}
+                            {line.error && !removed ? <p className="mt-1.5 text-xs text-amber-200/90">{line.error}</p> : null}
                             {waiting ? (
                               <div className="mt-3 flex gap-2">
                                 <button
@@ -951,13 +1722,506 @@ function RunScreen({
                             ) : null}
                           </div>
                         </li>
+                        </Fragment>
                       );
                     })}
                   </ol>
                 )}
               </section>
+              <aside className="flex max-h-[calc(100vh-8rem)] flex-col rounded-3xl border border-zinc-800 bg-zinc-900 xl:sticky xl:top-0">
+                <div className="shrink-0 border-b border-zinc-800 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-zinc-50">Accounts</h3>
+                    <span className="text-xs tabular-nums text-zinc-500">{rosterMembers.length}</span>
+                  </div>
+                  {includedGroupOptions.length > 1 ? (
+                    <select
+                      value={rosterGroup?.id ?? ""}
+                      disabled={busy}
+                      onChange={(event) => {
+                        setRosterGroupId(event.target.value);
+                        setRosterFocus(null);
+                        setAddMode(null);
+                        setBulkIds([]);
+                      }}
+                      className="mt-3 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-400/50 disabled:opacity-50"
+                    >
+                      {includedGroupOptions.map((group) => (
+                        <option key={group.groupId} value={group.groupId}>
+                          {group.title}
+                        </option>
+                      ))}
+                    </select>
+                  ) : rosterGroup ? (
+                    <p className="mt-1 truncate text-xs text-zinc-500">{rosterGroup.title}</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-zinc-500">Include a group first.</p>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      disabled={busy || !rosterGroup}
+                      onClick={() => {
+                        setAddMode((mode) => (mode === "one" ? null : "one"));
+                        setAddQuery("");
+                        setBulkIds([]);
+                      }}
+                      className={`flex-1 rounded-xl border px-2 py-1.5 text-xs disabled:opacity-50 ${
+                        addMode === "one" ? "border-cyan-400/50 text-cyan-100" : "border-zinc-700 text-zinc-200"
+                      }`}
+                    >
+                      Add one
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !rosterGroup}
+                      onClick={() => {
+                        setAddMode((mode) => (mode === "bulk" ? null : "bulk"));
+                        setAddQuery("");
+                        setBulkIds([]);
+                      }}
+                      className={`flex-1 rounded-xl border px-2 py-1.5 text-xs disabled:opacity-50 ${
+                        addMode === "bulk" ? "border-cyan-400/50 text-cyan-100" : "border-zinc-700 text-zinc-200"
+                      }`}
+                    >
+                      Add several
+                    </button>
+                  </div>
+                </div>
+                {addMode && rosterGroup ? (
+                  <div className="shrink-0 border-b border-zinc-800 p-3">
+                    <input
+                      value={addQuery}
+                      onChange={(event) => setAddQuery(event.target.value)}
+                      placeholder="Search prop accounts"
+                      className={inputCls}
+                    />
+                    <ul className="mt-2 flex max-h-40 flex-col gap-1 overflow-auto">
+                      {addCandidates.length === 0 ? (
+                        <li className="px-1 py-2 text-xs text-zinc-500">No accounts left to add.</li>
+                      ) : (
+                        addCandidates.slice(0, 40).map((persona) => (
+                          <li key={persona.userId}>
+                            {addMode === "one" ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => onAddAccounts(rosterGroup.id, [persona.userId])}
+                                className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                              >
+                                <PersonaAvatar name={persona.name} avatarUrl={persona.avatarUrl} size="sm" />
+                                <span className="truncate">{persona.name}</span>
+                              </button>
+                            ) : (
+                              <label className="flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800">
+                                <input
+                                  type="checkbox"
+                                  checked={bulkIds.includes(persona.userId)}
+                                  disabled={busy}
+                                  onChange={(event) =>
+                                    setBulkIds((current) =>
+                                      event.target.checked
+                                        ? [...current, persona.userId]
+                                        : current.filter((id) => id !== persona.userId),
+                                    )
+                                  }
+                                  className="h-4 w-4 accent-cyan-400"
+                                />
+                                <span className="truncate">{persona.name}</span>
+                              </label>
+                            )}
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                    {addMode === "bulk" ? (
+                      <button
+                        type="button"
+                        disabled={busy || bulkIds.length === 0}
+                        onClick={() => {
+                          onAddAccounts(rosterGroup.id, bulkIds);
+                          setBulkIds([]);
+                          setAddMode(null);
+                          setAddQuery("");
+                        }}
+                        className="mt-2 w-full rounded-xl border border-cyan-400/30 px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-50"
+                      >
+                        Add {bulkIds.length === 0 ? "selected" : bulkIds.length}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="min-h-0 flex-1 overflow-auto p-2">
+                  <button
+                    type="button"
+                    onClick={() => setRosterFocus(null)}
+                    className={`mb-1 w-full rounded-xl px-3 py-2 text-left text-sm ${
+                      rosterFocus === null ? "bg-cyan-400/15 text-cyan-100" : "text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    All accounts
+                  </button>
+                  {rosterMembers.length === 0 ? (
+                    <p className="px-3 py-4 text-sm text-zinc-500">No prop accounts in this conversation.</p>
+                  ) : (
+                    <ul className="flex flex-col gap-1">
+                      {rosterMembers.map((member) => {
+                        const persona = personaById.get(member.userId);
+                        const selected = rosterFocus === member.userId;
+                        return (
+                          <li key={member.userId}>
+                            <button
+                              id={`run-roster-${member.userId}`}
+                              type="button"
+                              onClick={() => setRosterFocus(member.userId)}
+                              className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${
+                                selected ? "bg-cyan-400/15 text-cyan-100" : "text-zinc-200 hover:bg-zinc-800"
+                              }`}
+                            >
+                              <PersonaAvatar name={member.name} avatarUrl={persona?.avatarUrl ?? null} size="sm" />
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm">{member.name}</span>
+                                {member.username ? <span className="block truncate text-[11px] text-zinc-500">@{member.username}</span> : null}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center justify-between gap-2 border-t border-zinc-800 p-3">
+                  <button
+                    type="button"
+                    disabled={rosterMembers.length === 0}
+                    aria-label="Previous account"
+                    onClick={() => {
+                      if (rosterMembers.length === 0) return;
+                      const index = rosterFocus ? rosterMembers.findIndex((member) => member.userId === rosterFocus) : 0;
+                      const next = (index - 1 + rosterMembers.length) % rosterMembers.length;
+                      setRosterFocus(rosterMembers[next]?.userId ?? null);
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-700 text-zinc-200 disabled:opacity-50"
+                  >
+                    <ChevronUp className="h-4 w-4" aria-hidden />
+                  </button>
+                  <p className="min-w-0 truncate text-xs text-zinc-500">
+                    {rosterFocus
+                      ? rosterMembers.find((member) => member.userId === rosterFocus)?.name ?? "Account"
+                      : "All accounts"}
+                  </p>
+                  <button
+                    type="button"
+                    disabled={rosterMembers.length === 0}
+                    aria-label="Next account"
+                    onClick={() => {
+                      if (rosterMembers.length === 0) return;
+                      const index = rosterFocus ? rosterMembers.findIndex((member) => member.userId === rosterFocus) : -1;
+                      const next = (index + 1) % rosterMembers.length;
+                      setRosterFocus(rosterMembers[next]?.userId ?? null);
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-700 text-zinc-200 disabled:opacity-50"
+                  >
+                    <ChevronDown className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+              </aside>
+              </div>
+            ) : null}
 
-              <aside className="flex flex-col gap-6">
+            {tab === "analytics" ? <RunAnalytics region={region} /> : null}
+
+            {tab === "settings" ? (
+              <div className="flex flex-col gap-6">
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <h3 className="text-sm font-semibold text-zinc-50">Objective</h3>
+                  <p className="mt-1 text-xs text-zinc-500">The goal for every group in this region. Change it here.</p>
+                  <textarea
+                    value={objective}
+                    disabled={busy || !region.hubId}
+                    onChange={(event) => setObjective(event.target.value)}
+                    rows={3}
+                    placeholder="Create very compelling engagement to boost user conversations"
+                    className="mt-3 w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none focus:border-cyan-400/50 disabled:opacity-50"
+                  />
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <p className="text-xs text-zinc-500">
+                      {region.hubId ? "Saved on this region." : "This set of groups is not in a region yet."}
+                    </p>
+                    <button
+                      type="button"
+                      disabled={busy || !region.hubId || objective.trim() === region.objective.trim()}
+                      onClick={() => onSaveObjective(region.hubId, objective)}
+                      className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-sm text-cyan-100 disabled:opacity-50"
+                    >
+                      Save objective
+                    </button>
+                  </div>
+                </section>
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <h3 className="text-sm font-semibold text-zinc-50">Settings</h3>
+                  <p className="mt-1 text-xs text-zinc-500">Grammar, abbreviations, rules, cuss words, and the week apply to every included group.</p>
+                </section>
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-zinc-50">How grammatically correct should they be?</h3>
+                    <p className="shrink-0 text-sm text-cyan-200">{grammarLabel(grammar)}</p>
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">{grammarHint(grammar)}</p>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={grammar}
+                    disabled={busy}
+                    aria-label="How grammatically correct should they be?"
+                    aria-valuetext={grammarLabel(grammar)}
+                    onChange={(event) => setGrammar(Number(event.target.value))}
+                    className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-cyan-400 disabled:opacity-50"
+                  />
+                  <div className="mt-1 flex justify-between text-[11px] text-zinc-500">
+                    <span>Messy</span>
+                    <span>Correct</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy || grammar === run.grammar}
+                    onClick={() => onSaveGrammar(includedIds, grammar)}
+                    className="mt-3 rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </section>
+
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-zinc-50">How much should they use abbreviations?</h3>
+                    <p className="shrink-0 text-sm text-cyan-200">{abbrevLabel(abbrev)}</p>
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">{abbrevHint(abbrev)}</p>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={abbrev}
+                    disabled={busy}
+                    aria-label="How much should they use abbreviations?"
+                    aria-valuetext={abbrevLabel(abbrev)}
+                    onChange={(event) => setAbbrev(Number(event.target.value))}
+                    className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-cyan-400 disabled:opacity-50"
+                  />
+                  <div className="mt-1 flex justify-between text-[11px] text-zinc-500">
+                    <span>None</span>
+                    <span>Heavy</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy || abbrev === run.abbrev}
+                    onClick={() => onSaveAbbrev(includedIds, abbrev)}
+                    className="mt-3 rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </section>
+
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <h3 className="text-sm font-semibold text-zinc-50">Rules</h3>
+                  <p className="mt-1 text-xs text-zinc-500">The model follows these on every new line in this run.</p>
+                  <label className="mt-4 flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={noHyphens}
+                      disabled={busy}
+                      onChange={(event) => setNoHyphens(event.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-cyan-400 disabled:opacity-50"
+                    />
+                    <span>
+                      <span className="block text-sm text-zinc-100">Never allow hyphens</span>
+                      <span className="block text-xs text-zinc-500">New lines use a space or a period instead of a hyphen or dash.</span>
+                    </span>
+                  </label>
+                  <div className="mt-4 flex flex-col gap-2">
+                    {rules.map((rule, index) => (
+                      <div key={index} className="flex items-start gap-2">
+                        <input
+                          className={inputCls}
+                          aria-label={`Rule ${index + 1}`}
+                          maxLength={180}
+                          value={rule}
+                          onChange={(event) =>
+                            setRules((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
+                          }
+                        />
+                        <button
+                          type="button"
+                          disabled={busy}
+                          aria-label={`Remove rule ${index + 1}`}
+                          onClick={() => setRules((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                          className="shrink-0 rounded-xl border border-zinc-700 px-3 py-2 text-xs text-zinc-300 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy || rules.length >= 12}
+                      onClick={() => setRules((current) => [...current, ""])}
+                      className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50"
+                    >
+                      Add a rule
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || serializeRunRules(withNoHyphenRule(rules, noHyphens)) === serializeRunRules(run.rules)}
+                      onClick={() => onSaveRules(includedIds, withNoHyphenRule(rules, noHyphens))}
+                      className="rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
+                    >
+                      Save rules
+                    </button>
+                  </div>
+                </section>
+
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <button
+                    type="button"
+                    onClick={() => setAdvanced((value) => !value)}
+                    className="flex w-full items-center justify-between text-left"
+                    aria-expanded={advanced}
+                  >
+                    <span>
+                      <span className="block text-sm font-semibold text-zinc-50">Advanced options</span>
+                      <span className="mt-1 block text-xs text-zinc-500">
+                        {run.swear ? `Cuss words ${SWEAR_RATES.find((item) => item.id === run.swearRate)?.label.toLowerCase()}` : "Cuss words off"}
+                      </span>
+                    </span>
+                    <span className="text-xs text-cyan-200">{advanced ? "Hide" : "Show"}</span>
+                  </button>
+                  {advanced ? (
+                    <div className="mt-4 border-t border-zinc-800 pt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-zinc-100">Cuss words</p>
+                          <p className="text-xs text-zinc-500">
+                            {swear ? "A mild cuss word, on some new lines. No slurs." : "New lines stay clean."}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={swear}
+                          aria-label="Allow cuss words"
+                          disabled={busy}
+                          onClick={() => setSwear((value) => !value)}
+                          className={`relative h-7 w-12 shrink-0 rounded-full disabled:opacity-50 ${swear ? "bg-cyan-400" : "bg-zinc-700"}`}
+                        >
+                          <span className={`absolute top-1 h-5 w-5 rounded-full bg-zinc-950 ${swear ? "left-6" : "left-1"}`} />
+                        </button>
+                      </div>
+                      {swear ? (
+                        <div className="mt-3">
+                          <p className="text-xs text-zinc-500">Frequency</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {SWEAR_RATES.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                disabled={busy}
+                                onClick={() => setSwearRate(item.id)}
+                                className={`rounded-xl border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                                  swearRate === item.id ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-zinc-700 text-zinc-300"
+                                }`}
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-xs text-zinc-500">{SWEAR_RATES.find((item) => item.id === swearRate)?.hint}</p>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={busy || (swear === run.swear && swearRate === run.swearRate)}
+                        onClick={() => onSaveSwear(includedIds, swear, swearRate)}
+                        className="mt-4 rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  ) : null}
+                </section>
+
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-50">This week</h3>
+                      <p className="mt-1 text-xs text-zinc-500">
+                        {weekOn
+                          ? describeWeek(weekDays, weekStart, weekEnd, weekEveryHours * 60, callsPerDay)
+                          : "Off. This run is not on a weekly schedule."}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={weekOn}
+                      aria-label="Schedule this run for the week"
+                      disabled={busy}
+                      onClick={() => setWeekOn((value) => !value)}
+                      className={`relative h-7 w-12 shrink-0 rounded-full disabled:opacity-50 ${weekOn ? "bg-cyan-400" : "bg-zinc-700"}`}
+                    >
+                      <span className={`absolute top-1 h-5 w-5 rounded-full bg-zinc-950 ${weekOn ? "left-6" : "left-1"}`} />
+                    </button>
+                  </div>
+                  {weekOn ? (
+                    <div className="mt-4 border-t border-zinc-800 pt-4">
+                      <WeekFields
+                        days={weekDays}
+                        startHour={weekStart}
+                        endHour={weekEnd}
+                        everyHours={weekEveryHours}
+                        callsPerDay={callsPerDay}
+                        posts={postsInWindow(weekStart, weekEnd, weekEveryHours * 60, callsPerDay, run.repliesPerPost)}
+                        disabled={busy}
+                        onDays={setWeekDays}
+                        onStart={setWeekStart}
+                        onEnd={setWeekEnd}
+                        onEvery={setWeekEveryHours}
+                        onCalls={setCallsPerDay}
+                      />
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      (weekOn === run.weekDays > 0 &&
+                        (!weekOn ||
+                          (weekDays === run.weekDays &&
+                            weekStart === run.weekStartHour &&
+                            weekEnd === run.weekEndHour &&
+                            weekEveryHours * 60 === run.weekEveryMinutes &&
+                            callsPerDay === run.callsPerDay)))
+                    }
+                    onClick={() =>
+                      onSaveWeek(includedIds, {
+                        days: weekOn ? weekDays : 0,
+                        startHour: weekStart,
+                        endHour: weekEnd,
+                        everyMinutes: weekEveryHours * 60,
+                        callsPerDay,
+                      })
+                    }
+                    className="mt-4 rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </section>
+
                 <section
                   className={`rounded-3xl border p-5 ${run.autoContinue ? "border-cyan-400/40 bg-zinc-900" : "border-zinc-800 bg-zinc-900"}`}
                 >
@@ -976,7 +2240,7 @@ function RunScreen({
                       aria-checked={run.autoContinue}
                       aria-label="Make this conversation automatic"
                       disabled={busy}
-                      onClick={() => onSetAutomatic(run.groupId, !run.autoContinue, postsPerDayValue)}
+                      onClick={() => onSetAutomatic(includedIds, !run.autoContinue, postsPerDayValue)}
                       className={`relative h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${
                         run.autoContinue ? "bg-cyan-400" : "bg-zinc-700"
                       }`}
@@ -991,7 +2255,7 @@ function RunScreen({
                       className="mt-4 flex items-end gap-2 border-t border-zinc-800 pt-4"
                       onSubmit={(event) => {
                         event.preventDefault();
-                        onSetAutomatic(run.groupId, true, postsPerDayValue);
+                        onSetAutomatic(includedIds, true, postsPerDayValue);
                       }}
                     >
                       <label className="flex-1 text-xs text-zinc-400">
@@ -1083,8 +2347,9 @@ function RunScreen({
                     </li>
                   </ul>
                 </section>
-              </aside>
-            </div>
+              </div>
+            ) : null}
+          </div>
           </div>
         </div>
       </main>
@@ -1093,22 +2358,137 @@ function RunScreen({
   );
 }
 
-function StatTile({ label, value, sub, accent }: { label: string; value: string; sub: string; accent?: string }) {
+function RunAnalytics({ region }: { region: RegionRun }) {
+  const stats = buildRunAnalytics(region);
+  const groupMax = Math.max(1, ...stats.groups.map((group) => group.sent + group.waiting + group.waitingLater + group.failed));
+  const speakerMax = Math.max(1, ...stats.speakers.map((speaker) => speaker.sent));
+  const hourMax = Math.max(1, ...stats.hours.map((hour) => hour.sent));
+  const decided = stats.jumped + stats.stayed + stats.undecided;
   return (
-    <div className="rounded-2xl border border-zinc-800 px-4 py-3">
-      <p className="text-xs text-zinc-500">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold tabular-nums ${accent ?? "text-zinc-50"}`}>{value}</p>
-      <p className="mt-0.5 text-xs text-zinc-500">{sub}</p>
+    <div className="flex flex-col gap-6">
+      <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+        <h3 className="text-sm font-semibold text-zinc-50">Analytics</h3>
+        <p className="mt-1 text-xs text-zinc-500">Today, New York time. Lines still waiting are counted until they send.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Metric label="Sent" value={String(stats.sent)} sub={`${stats.posts} posts · ${stats.replies} replies`} />
+          <Metric
+            label="Waiting today"
+            value={String(stats.waiting)}
+            sub={stats.waitingLater > 0 ? `${stats.waitingLater} later this week` : "scheduled or sending"}
+          />
+          <Metric label="Failed" value={String(stats.failed)} sub={stats.failed > 0 ? "see Conversations" : "none so far"} />
+          <Metric
+            label="Jumped in"
+            value={stats.included === 0 ? "0" : String(stats.jumped)}
+            sub={stats.included === 0 ? "no accounts included" : `of ${stats.included} included`}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+        <h3 className="text-sm font-semibold text-zinc-50">When they sent</h3>
+        {stats.hours.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-500">Nothing sent yet today.</p>
+        ) : (
+          <div className="mt-4 flex h-28 items-end gap-1">
+            {stats.hours.map((hour) => (
+              <div key={hour.hour} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
+                <span className="text-[10px] tabular-nums text-zinc-500">{hour.sent > 0 ? hour.sent : ""}</span>
+                  <div className="flex h-16 w-full items-end">
+                  <div
+                    className={`w-full rounded-sm ${hour.sent === 0 ? "bg-zinc-800" : "bg-cyan-400"}`}
+                    style={{ height: `${hour.sent === 0 ? 8 : Math.max(12, (hour.sent / hourMax) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-zinc-500">{hour.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+          <h3 className="text-sm font-semibold text-zinc-50">Groups</h3>
+          {stats.groups.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-500">No groups included.</p>
+          ) : (
+            <ul className="mt-4 flex flex-col gap-3">
+              {stats.groups.map((group) => (
+                <li key={group.title}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span className="truncate text-zinc-100">{group.title}</span>
+                    <span className="shrink-0 tabular-nums text-zinc-400">{group.sent} sent</span>
+                  </div>
+                  <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                    <div className="h-full bg-cyan-400" style={{ width: `${(group.sent / groupMax) * 100}%` }} />
+                    <div className="h-full bg-cyan-200/70" style={{ width: `${(group.waiting / groupMax) * 100}%` }} />
+                    <div className="h-full bg-zinc-500" style={{ width: `${(group.waitingLater / groupMax) * 100}%` }} />
+                    <div className="h-full bg-amber-300" style={{ width: `${(group.failed / groupMax) * 100}%` }} />
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {group.waiting > 0 ? `${group.waiting} waiting today` : "none waiting today"}
+                    {group.waitingLater > 0 ? ` · ${group.waitingLater} later` : ""}
+                    {group.failed > 0 ? ` · ${group.failed} failed` : ""}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+          <h3 className="text-sm font-semibold text-zinc-50">Who spoke</h3>
+          {stats.speakers.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-500">Nobody has sent a line yet today.</p>
+          ) : (
+            <ul className="mt-4 flex flex-col gap-3">
+              {stats.speakers.map((speaker) => (
+                <li key={speaker.id}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span className="truncate text-zinc-100">{speaker.name}</span>
+                    <span className="shrink-0 tabular-nums text-zinc-400">{speaker.sent}</span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                    <div className="h-full bg-cyan-400" style={{ width: `${(speaker.sent / speakerMax) * 100}%` }} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+        <h3 className="text-sm font-semibold text-zinc-50">Jump in</h3>
+        <p className="mt-1 text-xs text-zinc-500">Latest decision for each included account.</p>
+        {stats.included === 0 ? (
+          <p className="mt-3 text-sm text-zinc-500">No accounts included.</p>
+        ) : (
+          <>
+            <div className="mt-4 flex h-2.5 overflow-hidden rounded-full bg-zinc-800">
+              <div className="h-full bg-cyan-400" style={{ width: `${decided === 0 ? 0 : (stats.jumped / decided) * 100}%` }} />
+              <div className="h-full bg-zinc-500" style={{ width: `${decided === 0 ? 0 : (stats.stayed / decided) * 100}%` }} />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
+              <span>{stats.jumped} jumped in</span>
+              <span>{stats.stayed} stayed out</span>
+              <span>{stats.undecided} no decision yet</span>
+            </div>
+          </>
+        )}
+      </section>
     </div>
   );
 }
 
-function Legend({ dot, label }: { dot: string; label: string }) {
+function Metric({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
-    <span className="flex items-center gap-1.5">
-      <span className={`h-2 w-2 rounded-full ${dot}`} />
-      {label}
-    </span>
+    <div className="rounded-2xl border border-zinc-800 px-4 py-3">
+      <p className="text-xs text-zinc-500">{label}</p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-50">{value}</p>
+      <p className="mt-0.5 text-xs text-zinc-500">{sub}</p>
+    </div>
   );
 }
 
@@ -1210,6 +2590,32 @@ function CardPager({
   );
 }
 
+function AccountVoice({
+  persona,
+  disabled,
+  onSave,
+}: {
+  persona: ConversationPersona;
+  disabled: boolean;
+  onSave: (voice: PropVoice) => void;
+}) {
+  const saved = personaVoice(persona);
+  const [voice, setVoice] = useState(saved);
+  return (
+    <div className="mt-3 border-t border-zinc-800 pt-3">
+      <PropVoiceFields voice={voice} disabled={disabled} fieldClassName={inputCls} onChange={setVoice} />
+      <button
+        type="button"
+        disabled={disabled || samePropVoice(voice, saved)}
+        onClick={() => onSave(voice)}
+        className="mt-3 rounded-xl border border-cyan-400/30 px-3 py-1.5 text-sm text-cyan-100 disabled:opacity-50"
+      >
+        Save personality
+      </button>
+    </div>
+  );
+}
+
 function initials(name: string) {
   const letters = name
     .trim()
@@ -1220,132 +2626,16 @@ function initials(name: string) {
   return letters || "?";
 }
 
-function ActiveGroupCard({
-  group,
-  disabled,
-  onSave,
-  onPause,
-  onPreview,
-  onQueuePost,
-}: {
-  group: ConversationGroup;
-  disabled: boolean;
-  onSave: (next: {
-    groupId: string;
-    enabled: boolean;
-    topic: string;
-    postsPerDay: number;
-    repliesPerPost: number;
-  }) => Promise<void>;
-  onPause: () => Promise<void>;
-  onPreview: (userId: string) => Promise<string | null>;
-  onQueuePost: (userId: string) => Promise<void>;
-}) {
-  const [topic, setTopic] = useState(group.topic);
-  const [postsPerDay, setPostsPerDay] = useState(String(group.postsPerDay));
-  const [repliesPerPost, setRepliesPerPost] = useState(String(group.repliesPerPost));
-  const [userId, setUserId] = useState(group.members[0]?.userId ?? "");
-  const [preview, setPreview] = useState<string | null>(null);
-
-  return (
-    <form
-      className="rounded-2xl border border-zinc-800 p-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void onSave({
-          groupId: group.id,
-          enabled: true,
-          topic,
-          postsPerDay: Number(postsPerDay),
-          repliesPerPost: Number(repliesPerPost),
-        });
-      }}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-zinc-100">{group.title}</p>
-          <p className="text-xs text-zinc-500">
-            {group.hubTitle ? `${group.hubTitle} · ` : ""}
-            {group.propMemberCount} prop {group.propMemberCount === 1 ? "account" : "accounts"}
-            {!group.enabled && group.propMemberCount < 2 ? " · needs two" : ""}
-          </p>
-        </div>
-        {group.enabled ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void onPause()}
-            className="rounded-xl border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 disabled:opacity-50"
-          >
-            Pause
-          </button>
-        ) : null}
-      </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_5rem_5rem_auto]">
-        <input className={inputCls} placeholder="Topic" value={topic} onChange={(event) => setTopic(event.target.value)} />
-        <input
-          className={inputCls}
-          type="number"
-          min={0}
-          max={20}
-          aria-label="Posts per day"
-          value={postsPerDay}
-          onChange={(event) => setPostsPerDay(event.target.value)}
-        />
-        <input
-          className={inputCls}
-          type="number"
-          min={0}
-          max={6}
-          aria-label="Replies per post"
-          value={repliesPerPost}
-          onChange={(event) => setRepliesPerPost(event.target.value)}
-        />
-        <button
-          type="submit"
-          disabled={disabled || (!group.enabled && group.propMemberCount < 2)}
-          className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50"
-        >
-          {group.enabled ? "Save" : "Turn on"}
-        </button>
-      </div>
-      <div className="mt-3 flex flex-wrap items-end gap-2">
-        <label className="min-w-40 flex-1 text-sm text-zinc-400">
-          Preview as
-          <select className={`${inputCls} mt-1`} value={userId} onChange={(event) => setUserId(event.target.value)}>
-            {group.members.map((member) => (
-              <option key={member.userId} value={member.userId}>
-                {member.name}
-                {member.username ? ` (@${member.username})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={disabled || !userId}
-          onClick={() =>
-            void (async () => {
-              const text = await onPreview(userId);
-              if (text) setPreview(text);
-            })()
-          }
-          className="rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
-        >
-          Preview
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !userId}
-          onClick={() => void onQueuePost(userId)}
-          className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50"
-        >
-          Queue post
-        </button>
-      </div>
-      {preview ? <p className="mt-3 rounded-2xl border border-zinc-800 px-3 py-2 text-sm text-zinc-100">{preview}</p> : null}
-    </form>
-  );
+function personaVoice(persona: ConversationPersona): PropVoice {
+  return {
+    personality: persona.personality,
+    swear: persona.swear,
+    swearRate: persona.swearRate,
+    grammar: persona.grammar,
+    abbrev: persona.abbrev,
+    behavior: persona.behavior,
+    traits: persona.traits,
+  };
 }
 
 function PersonaRow({
@@ -1356,17 +2646,18 @@ function PersonaRow({
 }: {
   persona: ConversationPersona;
   disabled: boolean;
-  onSave: (personality: string) => Promise<void>;
+  onSave: (voice: PropVoice) => Promise<void>;
   onCopy: () => Promise<void>;
 }) {
-  const [personality, setPersonality] = useState(persona.personality);
+  const saved = personaVoice(persona);
+  const [voice, setVoice] = useState(saved);
 
   return (
     <form
-      className="grid gap-3 rounded-2xl border border-zinc-800 p-3 md:grid-cols-[12rem_minmax(0,1fr)_auto] md:items-start"
+      className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5"
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave(personality);
+        void onSave(voice);
       }}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -1382,24 +2673,27 @@ function PersonaRow({
           <p className="truncate text-xs text-zinc-500">{persona.username ? `@${persona.username}` : "No username"}</p>
         </div>
       </div>
-      <textarea
-        className={`${inputCls} min-h-20 resize-y`}
-        placeholder="Casual, local, a little skeptical"
-        maxLength={500}
-        value={personality}
-        onChange={(event) => setPersonality(event.target.value)}
-      />
-      <div className="flex flex-col gap-2">
-        <button type="submit" disabled={disabled} className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50">
-          Save
+      <p className="mt-3 text-xs text-zinc-500">
+        Age, interests, temperament, and the other traits decide how this account writes. Cuss words, grammar, and abbreviations can still follow the conversation.
+      </p>
+      <div className="mt-4">
+        <PropVoiceFields voice={voice} disabled={disabled} fieldClassName={inputCls} onChange={setVoice} />
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="submit"
+          disabled={disabled || samePropVoice(voice, saved)}
+          className="rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
+        >
+          Save behavior
         </button>
         <button
           type="button"
-          disabled={disabled || !personality.trim()}
+          disabled={disabled || !voiceIsSet(saved)}
           onClick={() => void onCopy()}
           className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50"
         >
-          Copy to group
+          Copy behavior
         </button>
       </div>
     </form>

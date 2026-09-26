@@ -11,7 +11,8 @@ export type PostItem = {
   id: string;
   body: string | null;
   author_username: string | null;
-  community_name: string | null;
+  place_name: string | null;
+  image_url: string | null;
   likes_count: number;
   created_at: string | null;
 };
@@ -22,6 +23,7 @@ export type ProfileItem = {
   username: string | null;
   account_role: string;
   connections_count: number;
+  real_connections: number;
 };
 
 function requireServiceRole(): void {
@@ -45,41 +47,119 @@ async function assertAdmin(): Promise<void> {
 // Fetch
 // ---------------------------------------------------------------------------
 
-export async function fetchPosts(search?: string): Promise<PostItem[]> {
-  await assertAdmin();
-  let query = supabaseAdmin
-    .from("posts")
-    .select("id,body,author_username,community_name,likes_count,created_at")
-    .order("created_at", { ascending: false })
-    .limit(30);
+const PAGE_SIZE = 24;
 
-  if (search?.trim()) {
-    const term = escapeIlikeTerm(search.trim());
-    query = query.or(
-      `body.ilike.%${term}%,author_username.ilike.%${term}%,community_name.ilike.%${term}%`
-    );
+function clampInt(value: number, min: number, max: number): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+async function idsMatching(table: string, column: string, term: string): Promise<string[]> {
+  const { data, error } = await supabaseAdmin
+    .from(table)
+    .select("id")
+    .ilike(column, `%${term}%`)
+    .limit(40);
+  if (error) return [];
+  return ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
+}
+
+export async function fetchPosts(
+  search?: string,
+  offset = 0,
+  sort: "recent" | "likes" = "recent",
+): Promise<PostItem[]> {
+  await assertAdmin();
+  const start = Math.max(0, Math.floor(offset) || 0);
+  let query = supabaseAdmin
+    .from("area_discussion_comments")
+    .select("id,body,likes_count,created_at,author_id,discussion_id,group_id,image_url,image_thumb_url,gif_url,gif_preview_url,clip_thumb_url")
+    .is("parent_id", null)
+    .range(start, start + PAGE_SIZE - 1);
+
+  query =
+    sort === "likes"
+      ? query.order("likes_count", { ascending: false }).order("created_at", { ascending: false })
+      : query.order("created_at", { ascending: false });
+
+  const term = search?.trim() ? escapeIlikeTerm(search.trim()) : "";
+  if (term) {
+    const [authorIds, hubIds, groupIds] = await Promise.all([
+      idsMatching("profiles", "username", term),
+      idsMatching("area_discussions", "title", term),
+      idsMatching("discussion_groups", "title", term),
+    ]);
+    const filters = [`body.ilike.%${term}%`];
+    if (authorIds.length) filters.push(`author_id.in.(${authorIds.join(",")})`);
+    if (hubIds.length) filters.push(`discussion_id.in.(${hubIds.join(",")})`);
+    if (groupIds.length) filters.push(`group_id.in.(${groupIds.join(",")})`);
+    query = query.or(filters.join(","));
   }
 
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
-  return ((data ?? []) as any[]).map((p) => ({
-    id: p.id,
-    body: p.body ?? null,
-    author_username: p.author_username ?? null,
-    community_name: p.community_name ?? null,
-    likes_count: p.likes_count ?? 0,
-    created_at: p.created_at ?? null,
-  }));
+  const rows = (data ?? []) as any[];
+  if (!rows.length) return [];
+
+  const authorIds = [...new Set(rows.map((row) => row.author_id).filter(Boolean))];
+  const hubIds = [...new Set(rows.map((row) => row.discussion_id).filter(Boolean))];
+  const groupIds = [...new Set(rows.map((row) => row.group_id).filter(Boolean))];
+
+  const [authors, hubs, groups] = await Promise.all([
+    authorIds.length
+      ? supabaseAdmin.from("profiles").select("id,username").in("id", authorIds)
+      : Promise.resolve({ data: [] }),
+    hubIds.length
+      ? supabaseAdmin.from("area_discussions").select("id,title").in("id", hubIds)
+      : Promise.resolve({ data: [] }),
+    groupIds.length
+      ? supabaseAdmin.from("discussion_groups").select("id,title").in("id", groupIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const authorName = new Map(((authors.data ?? []) as any[]).map((row) => [row.id, row.username ?? null]));
+  const hubName = new Map(((hubs.data ?? []) as any[]).map((row) => [row.id, row.title ?? null]));
+  const groupName = new Map(((groups.data ?? []) as any[]).map((row) => [row.id, row.title ?? null]));
+
+  return rows.map((row) => {
+    const group = row.group_id ? groupName.get(row.group_id) : null;
+    const hub = row.discussion_id ? hubName.get(row.discussion_id) : null;
+    return {
+      id: row.id,
+      body: row.body ?? null,
+      author_username: row.author_id ? authorName.get(row.author_id) ?? null : null,
+      place_name: [group, hub].filter(Boolean).join(" · ") || null,
+      image_url:
+        row.image_url ||
+        row.image_thumb_url ||
+        row.gif_preview_url ||
+        row.gif_url ||
+        row.clip_thumb_url ||
+        null,
+      likes_count: row.likes_count ?? 0,
+      created_at: row.created_at ?? null,
+    };
+  });
 }
 
-export async function fetchProfileItems(search?: string): Promise<ProfileItem[]> {
+export async function fetchProfileItems(
+  search?: string,
+  offset = 0,
+  sort: "name" | "connections" = "name",
+): Promise<ProfileItem[]> {
   await assertAdmin();
+  const start = Math.max(0, Math.floor(offset) || 0);
   let query = supabaseAdmin
     .from("profiles")
     .select("id,full_name,username,account_role,fake_connection_count")
-    .order("full_name", { ascending: true })
-    .limit(30);
+    .range(start, start + PAGE_SIZE - 1);
+
+  query =
+    sort === "connections"
+      ? query.order("fake_connection_count", { ascending: false }).order("full_name", { ascending: true })
+      : query.order("full_name", { ascending: true });
 
   if (search?.trim()) {
     const term = escapeIlikeTerm(search.trim());
@@ -111,6 +191,7 @@ export async function fetchProfileItems(search?: string): Promise<ProfileItem[]>
     full_name: p.full_name ?? null,
     username: p.username ?? null,
     account_role: p.account_role ?? "user",
+    real_connections: countMap[p.id] || 0,
     connections_count: (countMap[p.id] || 0) + Number(p.fake_connection_count ?? 0),
   }));
 }
@@ -120,22 +201,30 @@ export async function fetchProfileItems(search?: string): Promise<ProfileItem[]>
 // ---------------------------------------------------------------------------
 
 
-export async function boostPostLikes(postId: string, amount: number): Promise<number> {
+export async function boostPostLikes(
+  postId: string,
+  amount: number,
+  mode: "add" | "set" = "add",
+): Promise<number> {
   await assertAdmin();
   const { data, error: fetchErr } = await supabaseAdmin
-    .from("posts")
+    .from("area_discussion_comments")
     .select("likes_count")
     .eq("id", postId)
+    .is("parent_id", null)
     .single();
 
   if (fetchErr) throw new Error(fetchErr.message);
 
-  const newCount = (data?.likes_count ?? 0) + amount;
+  const current = data?.likes_count ?? 0;
+  const newCount =
+    mode === "set" ? clampInt(amount, 0, 1_000_000) : current + clampInt(amount, 1, 9999);
 
   const { error } = await supabaseAdmin
-    .from("posts")
+    .from("area_discussion_comments")
     .update({ likes_count: newCount })
-    .eq("id", postId);
+    .eq("id", postId)
+    .is("parent_id", null);
 
   if (error) throw new Error(error.message);
   return newCount;
@@ -143,10 +232,10 @@ export async function boostPostLikes(postId: string, amount: number): Promise<nu
 
 export async function boostProfileConnections(
   profileId: string,
-  amount: number
+  amount: number,
+  mode: "add" | "set" = "add",
 ): Promise<{ newCount: number; inserted: number }> {
   await assertAdmin();
-  const safeAmount = Math.max(0, Math.floor(Number(amount) || 0));
 
   const [{ data: profile, error: profileErr }, { count, error: countErr }] = await Promise.all([
     supabaseAdmin
@@ -163,8 +252,12 @@ export async function boostProfileConnections(
   if (profileErr) throw new Error(profileErr.message);
   if (countErr) throw new Error(countErr.message);
 
+  const realCount = count ?? 0;
   const fakeCount = Number(profile?.fake_connection_count ?? 0);
-  const nextFakeCount = fakeCount + safeAmount;
+  const nextFakeCount =
+    mode === "set"
+      ? Math.max(0, clampInt(amount, 0, 1_000_000) - realCount)
+      : fakeCount + clampInt(amount, 1, 9999);
 
   const { error: updateErr } = await supabaseAdmin
     .from("profiles")
@@ -173,5 +266,5 @@ export async function boostProfileConnections(
 
   if (updateErr) throw new Error(updateErr.message);
 
-  return { newCount: (count ?? 0) + nextFakeCount, inserted: safeAmount };
+  return { newCount: realCount + nextFakeCount, inserted: nextFakeCount - fakeCount };
 }

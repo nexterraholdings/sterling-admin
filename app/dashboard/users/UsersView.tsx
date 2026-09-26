@@ -1011,7 +1011,7 @@ function SelectionToolbar({
 }) {
   if (count === 0) return null;
   return (
-    <div className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-zinc-700 bg-zinc-950/80 px-4 py-3">
+    <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-zinc-700 bg-zinc-950/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-sm text-zinc-300">
         <span className="font-semibold text-zinc-50">{count}</span> selected
       </p>
@@ -1060,7 +1060,7 @@ function BulkDeleteModal({
         className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
         onClick={onCancel}
       />
-      <div className="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-2xl">
+      <div className="fixed left-1/2 top-1/2 z-50 max-h-[min(85dvh,100%)] w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-2xl">
         <DeleteTargetForm
           label={`${count} selected user${count === 1 ? "" : "s"}`}
           hasAuth={hasAuth}

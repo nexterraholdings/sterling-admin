@@ -10,6 +10,8 @@ import {
 } from "@/lib/notifications/definitionTypes";
 import type { NotificationTapDestination } from "@/lib/notifications/tapDestinations";
 import { sterlingBroadcastPushExtras } from "@/lib/notifications/pushBranding";
+import type { ProductNotificationCopy } from "@/lib/notifications/defaultProductNotificationCopy";
+import { SYSTEM_NOTIFICATION_CATALOG } from "@/lib/notifications/systemNotificationCatalog";
 
 const expo = new Expo();
 
@@ -433,5 +435,262 @@ export async function deleteTemplate(id: string): Promise<void> {
   requireServiceRole();
 
   const { error } = await supabaseAdmin.from("notification_templates").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Live inbox — rows actually stored in public.notifications
+// ---------------------------------------------------------------------------
+
+const ACTIVITY_PAGE_SIZE = 40;
+const ACTIVITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTIVITY_STAT_SAMPLE = 4000;
+
+export type NotificationActivityRow = {
+  id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  isRead: boolean;
+  createdAt: string;
+  userId: string;
+  actorId: string | null;
+  recipientLabel: string;
+  actorLabel: string | null;
+};
+
+export type NotificationTypeStat = {
+  type: string;
+  count: number;
+  latestTitle: string;
+  latestAt: string;
+};
+
+export type NotificationActivity = {
+  rows: NotificationActivityRow[];
+  total: number;
+  windowCount: number | null;
+  unreadCount: number | null;
+  statsTruncated: boolean;
+  typeStats: NotificationTypeStat[];
+};
+
+type NotificationDbRow = {
+  id: string;
+  type: string;
+  title: string | null;
+  body: string | null;
+  user_id: string;
+  actor_id: string | null;
+  is_read: boolean | null;
+  created_at: string;
+};
+
+function cleanActivityType(value: string | null | undefined): string | null {
+  const type = value?.trim() ?? "";
+  if (!type || !/^[a-z0-9_]+$/i.test(type) || type.length > 80) return null;
+  return type;
+}
+
+function cleanActivitySearch(value: string | null | undefined): string | null {
+  const search = value?.trim().replace(/[%_]/g, "") ?? "";
+  if (!search) return null;
+  return search.slice(0, 80);
+}
+
+function profileLabel(
+  profile: { username: string | null; full_name: string | null } | undefined,
+  id: string,
+): string {
+  if (profile?.username) return `@${profile.username}`;
+  if (profile?.full_name) return profile.full_name;
+  return id.slice(0, 8);
+}
+
+export async function fetchNotificationActivity(params: {
+  type?: string | null;
+  search?: string | null;
+  offset?: number;
+  includeStats?: boolean;
+}): Promise<NotificationActivity> {
+  await requireAdmin(MARKETING_ROLES);
+  requireServiceRole();
+
+  const type = cleanActivityType(params.type);
+  const search = cleanActivitySearch(params.search);
+  const offset = Math.min(Math.max(0, params.offset ?? 0), 5000);
+  const includeStats = params.includeStats !== false;
+  const since = new Date(Date.now() - ACTIVITY_WINDOW_MS).toISOString();
+
+  let listQuery = supabaseAdmin
+    .from("notifications")
+    .select("id,type,title,body,user_id,actor_id,is_read,created_at", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(offset, offset + ACTIVITY_PAGE_SIZE - 1);
+
+  if (type) listQuery = listQuery.eq("type", type);
+  if (search) listQuery = listQuery.ilike("title", `%${search}%`);
+
+  const listPromise = listQuery;
+  const samplePromise = includeStats
+    ? supabaseAdmin
+        .from("notifications")
+        .select("type,title,created_at")
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(ACTIVITY_STAT_SAMPLE)
+    : Promise.resolve({ data: null, error: null });
+  const windowPromise = includeStats
+    ? supabaseAdmin.from("notifications").select("id", { count: "exact", head: true }).gte("created_at", since)
+    : Promise.resolve({ count: null, error: null });
+  const unreadPromise = includeStats
+    ? supabaseAdmin
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", since)
+        .eq("is_read", false)
+    : Promise.resolve({ count: null, error: null });
+
+  const [listRes, sampleRes, windowRes, unreadRes] = await Promise.all([
+    listPromise,
+    samplePromise,
+    windowPromise,
+    unreadPromise,
+  ]);
+
+  if (listRes.error) throw new Error(listRes.error.message);
+  if (sampleRes.error) throw new Error(sampleRes.error.message);
+  if (windowRes.error) throw new Error(windowRes.error.message);
+  if (unreadRes.error) throw new Error(unreadRes.error.message);
+
+  const dbRows = (listRes.data ?? []) as NotificationDbRow[];
+  const profileIds = [
+    ...new Set(dbRows.flatMap((row) => [row.user_id, row.actor_id].filter((id): id is string => Boolean(id)))),
+  ];
+
+  const profiles = new Map<string, { username: string | null; full_name: string | null }>();
+  if (profileIds.length > 0) {
+    const { data, error } = await supabaseAdmin
+      .from("profiles")
+      .select("id,username,full_name")
+      .in("id", profileIds);
+    if (error) throw new Error(error.message);
+    for (const profile of (data ?? []) as {
+      id: string;
+      username: string | null;
+      full_name: string | null;
+    }[]) {
+      profiles.set(profile.id, profile);
+    }
+  }
+
+  const sample = (sampleRes.data ?? []) as { type: string; title: string | null; created_at: string }[];
+  const byType = new Map<string, NotificationTypeStat>();
+  for (const row of sample) {
+    const existing = byType.get(row.type);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    byType.set(row.type, {
+      type: row.type,
+      count: 1,
+      latestTitle: row.title?.trim() || row.type,
+      latestAt: row.created_at,
+    });
+  }
+
+  return {
+    rows: dbRows.map((row) => ({
+      id: row.id,
+      type: row.type,
+      title: row.title?.trim() || "(no title)",
+      body: row.body?.trim() || null,
+      isRead: row.is_read === true,
+      createdAt: row.created_at,
+      userId: row.user_id,
+      actorId: row.actor_id,
+      recipientLabel: profileLabel(profiles.get(row.user_id), row.user_id),
+      actorLabel: row.actor_id ? profileLabel(profiles.get(row.actor_id), row.actor_id) : null,
+    })),
+    total: listRes.count ?? dbRows.length,
+    windowCount: includeStats ? (windowRes.count ?? 0) : null,
+    unreadCount: includeStats ? (unreadRes.count ?? 0) : null,
+    statsTruncated: includeStats && sample.length >= ACTIVITY_STAT_SAMPLE,
+    typeStats: [...byType.values()].sort((a, b) => b.count - a.count),
+  };
+}
+
+export type ProductNotificationCopyState = {
+  copy: Record<string, ProductNotificationCopy>;
+  removed: string[];
+};
+
+export async function fetchProductNotificationCopy(): Promise<ProductNotificationCopyState> {
+  await requireAdmin(MARKETING_ROLES);
+  requireServiceRole();
+  const { data, error } = await supabaseAdmin
+    .from("notification_product_copy")
+    .select("type,title,body,removed");
+  if (error) throw new Error(error.message);
+  const copy: Record<string, ProductNotificationCopy> = {};
+  const removed: string[] = [];
+  for (const row of data ?? []) {
+    const type = String(row.type ?? "").trim();
+    if (!type) continue;
+    if (row.removed === true) {
+      removed.push(type);
+      continue;
+    }
+    const title = String(row.title ?? "").trim();
+    if (!title) continue;
+    const body = String(row.body ?? "").trim();
+    copy[type] = { title, body: body || null };
+  }
+  return { copy, removed };
+}
+
+export async function saveProductNotificationCopy(
+  type: string,
+  copy: ProductNotificationCopy,
+): Promise<ProductNotificationCopy> {
+  await requireAdmin(MARKETING_ROLES);
+  requireServiceRole();
+  const key = type.trim();
+  const title = copy.title.trim();
+  const body = copy.body?.trim() ? copy.body.trim() : null;
+  if (!key || !title) throw new Error("Title is required");
+  if (!SYSTEM_NOTIFICATION_CATALOG.some((row) => row.type === key)) {
+    throw new Error("Unknown notification type");
+  }
+  const { error } = await supabaseAdmin.from("notification_product_copy").upsert(
+    { type: key, title, body, removed: false, updated_at: new Date().toISOString() },
+    { onConflict: "type" },
+  );
+  if (error) throw new Error(error.message);
+  return { title, body };
+}
+
+export async function resetProductNotificationCopy(type: string): Promise<void> {
+  await requireAdmin(MARKETING_ROLES);
+  requireServiceRole();
+  const key = type.trim();
+  if (!key) return;
+  const { error } = await supabaseAdmin.from("notification_product_copy").delete().eq("type", key);
+  if (error) throw new Error(error.message);
+}
+
+export async function removeProductNotificationCopy(type: string): Promise<void> {
+  await requireAdmin(MARKETING_ROLES);
+  requireServiceRole();
+  const key = type.trim();
+  if (!key) return;
+  if (!SYSTEM_NOTIFICATION_CATALOG.some((row) => row.type === key)) {
+    throw new Error("Unknown notification type");
+  }
+  const { error } = await supabaseAdmin.from("notification_product_copy").upsert(
+    { type: key, title: "Removed", body: null, removed: true, updated_at: new Date().toISOString() },
+    { onConflict: "type" },
+  );
   if (error) throw new Error(error.message);
 }

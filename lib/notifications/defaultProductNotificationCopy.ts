@@ -20,6 +20,10 @@ export const DEFAULT_PRODUCT_NOTIFICATION_COPY: Record<string, ProductNotificati
   new_comment_like: { title: `${ACTOR} liked your comment`, body: null },
   new_mention: { title: `${ACTOR} mentioned you in a comment`, body: "@you see you there!" },
   poll_vote: { title: `${ACTOR} voted on your poll`, body: POST },
+  clip_like: { title: `${ACTOR} liked your video`, body: null },
+  clip_comment: { title: `${ACTOR} commented on your video`, body: "This angle is great." },
+  new_clip: { title: `${ACTOR} posted a new video`, body: null },
+  new_story: { title: `${ACTOR} posted a story`, body: null },
 
   new_member: { title: `${ACTOR} joined your community`, body: COMMUNITY },
   community_invite: { title: `${ACTOR} invited you to join ${COMMUNITY}`, body: "Private group for local updates" },
@@ -35,7 +39,24 @@ export const DEFAULT_PRODUCT_NOTIFICATION_COPY: Record<string, ProductNotificati
   event_updated: { title: `${ACTOR} updated ${EVENT}`, body: EVENT },
   event_cancelled: { title: `${ACTOR} cancelled ${EVENT}`, body: EVENT },
 
-  area_discussion_reply: { title: `${ACTOR} commented on your discussion`, body: DISCUSSION },
+  area_discussion_reply: { title: `${ACTOR} commented on your hub`, body: POST },
+  area_discussion_post: { title: DISCUSSION, body: POST },
+  discussion_group_post: { title: "Block watch", body: POST },
+  discussion_group_member_joined: { title: `${ACTOR} joined Block watch`, body: "Block watch" },
+  discussion_group_join_request: { title: `${ACTOR} wants to join Block watch`, body: "Block watch" },
+  discussion_group_join_approved: { title: `${ACTOR} added you to Block watch`, body: "Block watch" },
+  discussion_group_join_denied: {
+    title: `${ACTOR} declined your request to join Block watch`,
+    body: "Block watch",
+  },
+  nearby_people: { title: `${ACTOR} joined a hub nearby`, body: DISCUSSION },
+  local_posts_digest: { title: DISCUSSION, body: POST },
+  area_discussion_owner_digest: {
+    title: `${DISCUSSION} today`,
+    body: "3 joined, 2 posts. 1 still waiting for a reply.",
+  },
+  area_discussion_owner_milestone: { title: "10 neighbors joined", body: DISCUSSION },
+  area_discussion_owner_unanswered: { title: "A neighbor is waiting", body: POST },
   area_discussion_invite: { title: `${ACTOR} invited you to a map discussion`, body: DISCUSSION },
   area_discussion_live: { title: `${ACTOR} started an Emergency Meeting`, body: DISCUSSION },
   area_discussion_member_joined: { title: `${ACTOR} joined your discussion`, body: DISCUSSION },
@@ -65,6 +86,7 @@ export const DEFAULT_PRODUCT_NOTIFICATION_COPY: Record<string, ProductNotificati
     title: "Welcome to Sterling!",
     body: "Verify your phone in Profile settings to get started.",
   },
+  win_back: { title: "We miss you on Sterling", body: "Open the map and see what is new nearby." },
 
   system: {
     title: "**Important:** Scheduled maintenance tonight",
@@ -80,6 +102,40 @@ export function defaultCopyForType(type: string): ProductNotificationCopy {
       body: null,
     }
   );
+}
+
+/** Editable wording. {{name}} is the person, {{hub}} the place, {{post}} the post, {{community}} the community. */
+export function notificationCopyTemplate(type: string): ProductNotificationCopy {
+  const sample = defaultCopyForType(type);
+  const swap = (value: string | null) => {
+    if (!value) return null;
+    return value
+      .split(ACTOR).join("**{{name}}**")
+      .split(POST).join("{{post}}")
+      .split(DISCUSSION).join("{{hub}}")
+      .split("Block watch").join("{{hub}}")
+      .split(COMMUNITY).join("{{community}}")
+      .split(EVENT).join("{{post}}");
+  };
+  return {
+    title: swap(sample.title) || sample.title,
+    body: swap(sample.body),
+  };
+}
+
+export function previewNotificationCopy(template: ProductNotificationCopy): ProductNotificationCopy {
+  const swap = (value: string | null) => {
+    if (!value) return null;
+    return value
+      .split("{{name}}").join("Alex Rivera")
+      .split("{{post}}").join(POST)
+      .split("{{hub}}").join(DISCUSSION)
+      .split("{{community}}").join(COMMUNITY);
+  };
+  return {
+    title: swap(template.title) || template.title,
+    body: swap(template.body),
+  };
 }
 
 export const PRODUCT_NOTIFICATION_COPY_STORAGE_KEY = "sterling-admin-product-notification-copy-v1";

@@ -57,13 +57,13 @@ export function MfaScreen({ mode, factorId: initialFactorId }: MfaScreenProps) {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-zinc-950 px-6 py-16">
+    <div className="relative flex min-h-dvh items-center justify-center overflow-y-auto bg-zinc-950 px-4 py-8 sm:px-6 sm:py-16">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(16,185,129,0.12),transparent)]"
       />
 
-      <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800/90 bg-zinc-900/70 p-8 shadow-[0_24px_80px_-32px_rgba(0,0,0,0.8)] backdrop-blur-sm">
+      <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800/90 bg-zinc-900/70 p-5 shadow-[0_24px_80px_-32px_rgba(0,0,0,0.8)] backdrop-blur-sm sm:p-8">
         <div className="flex items-center gap-3">
           <div className="relative size-11 overflow-hidden rounded-2xl ring-1 ring-emerald-500/20">
             <Image src={logo} alt="Sterling" fill className="object-cover" priority />

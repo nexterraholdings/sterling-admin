@@ -1,3 +1,5 @@
+import type { PropTraits } from "@/lib/prop-voice";
+
 export type ConversationSettings = {
   enabled: boolean;
   dailyCallBudget: number;
@@ -28,11 +30,22 @@ export type ConversationGroup = {
   title: string;
   description: string | null;
   category: string | null;
+  hubId: string;
   hubTitle: string | null;
   propMemberCount: number;
   enabled: boolean;
   autoContinue: boolean;
   topic: string;
+  rules: string[];
+  swear: boolean;
+  swearRate: "rare" | "sometimes" | "often";
+  grammar: number;
+  abbrev: number;
+  weekDays: number;
+  weekStartHour: number;
+  weekEndHour: number;
+  weekEveryMinutes: number;
+  callsPerDay: number;
   postsPerDay: number;
   repliesPerPost: number;
   members: ConversationGroupMember[];
@@ -57,6 +70,15 @@ export type ConversationPersona = {
   name: string;
   username: string | null;
   personality: string;
+  /** Null follows the conversation run. */
+  swear: boolean | null;
+  swearRate: "rare" | "sometimes" | "often";
+  /** Null follows the conversation run. */
+  grammar: number | null;
+  /** Null follows the conversation run. */
+  abbrev: number | null;
+  behavior: string;
+  traits: PropTraits;
   folderId: string | null;
   avatarUrl: string | null;
   bio: string;
@@ -75,10 +97,26 @@ export type ConversationLogEntry = {
   finishedAt: string | null;
 };
 
+export type RunAccountMoment = {
+  at: string;
+  decision: "jumped_in" | "stayed_out";
+  subject: string;
+  pace: string;
+};
+
+export type RunAccount = {
+  userId: string;
+  name: string;
+  pace: string;
+  lastSpokeAt: string | null;
+  moment: RunAccountMoment | null;
+};
+
 export type ConversationRunLine = {
   id: string;
   authorId: string;
   authorName: string;
+  groupTitle: string;
   kind: "start_post" | "reply";
   status: "pending" | "running" | "done" | "failed" | "skipped";
   runAt: string;
@@ -98,6 +136,16 @@ export type ConversationActiveRun = {
   pace: string;
   autoContinue: boolean;
   postsPerDay: number;
+  rules: string[];
+  swear: boolean;
+  swearRate: "rare" | "sometimes" | "often";
+  grammar: number;
+  abbrev: number;
+  weekDays: number;
+  weekStartHour: number;
+  weekEndHour: number;
+  weekEveryMinutes: number;
+  callsPerDay: number;
   sent: number;
   waiting: number;
   running: number;
@@ -105,6 +153,32 @@ export type ConversationActiveRun = {
   total: number;
   nextAt: string | null;
   lines: ConversationRunLine[];
+  interacting: boolean;
+  accounts: RunAccount[];
+};
+
+export type RegionRunGroup = {
+  groupId: string;
+  title: string;
+  included: boolean;
+  interacting: boolean;
+  propMemberCount: number;
+};
+
+export type RegionRunAccount = RunAccount & {
+  included: boolean;
+  groupTitles: string[];
+};
+
+export type RegionRun = {
+  hubId: string;
+  title: string;
+  objective: string;
+  paused: boolean;
+  interacting: boolean;
+  groups: RegionRunGroup[];
+  accounts: RegionRunAccount[];
+  snapshot: ConversationActiveRun;
 };
 
 export type ConversationDashboard = {
@@ -117,6 +191,7 @@ export type ConversationDashboard = {
   queue: ConversationQueueItem[];
   log: ConversationLogEntry[];
   activeRuns: ConversationActiveRun[];
+  regionRuns: RegionRun[];
 };
 
 export const TOPIC_DIRECTIONS = [
@@ -148,6 +223,16 @@ export type ManualRunRequest = {
   postEveryMax: number;
   keepGoing: boolean;
   postsPerDay: number;
+  swear: boolean;
+  swearRate: "rare" | "sometimes" | "often";
+  grammar: number;
+  abbrev: number;
+  week: boolean;
+  weekDays: number;
+  weekStartHour: number;
+  weekEndHour: number;
+  weekEveryMinutes: number;
+  callsPerDay: number;
 };
 
 export type ConversationTickResult = {

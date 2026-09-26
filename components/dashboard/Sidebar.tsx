@@ -26,6 +26,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "People",
     items: [
       { href: "/dashboard/users", label: "Users", short: "US", description: "Profiles and accounts" },
+      { href: "/dashboard/cheats", label: "Cheats", short: "CH", description: "Fake likes and connections" },
       { href: "/dashboard/moderators", label: "Moderators", short: "MD", description: "Dashboard access and roles" },
       { href: "/dashboard/moderation", label: "Moderation", short: "MO", description: "Reports, flagged accounts, and bans" },
     ],
@@ -370,7 +371,7 @@ export function Sidebar({
             </svg>
           </button>
         </div>
-        <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <NavList pathname={pathname} role={role} order={order} onReorder={setOrder} onNavigate={onClose} />
         </nav>
       </aside>

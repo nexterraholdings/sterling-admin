@@ -11,7 +11,7 @@ export function Header({
   onToggleNav?: () => void;
 }) {
   return (
-    <header className="flex items-center justify-between border-b px-4 py-3 backdrop-blur-md sm:px-6">
+    <header className="flex items-center justify-between gap-3 border-b px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-md sm:px-6">
       <div className="min-w-0">
         <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.28em] text-cyan-300/80">Sterling ops</p>
         <h1 className="truncate text-lg font-semibold tracking-tight text-zinc-50">Admin workspace</h1>
@@ -33,7 +33,7 @@ export function Header({
         <button
           type="button"
           onClick={onToggleNav}
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition ${
             navOpen
               ? "border-cyan-300/60 bg-cyan-400/15 text-cyan-100"
               : "border-cyan-400/25 bg-cyan-400/5 text-cyan-200 hover:border-cyan-300/50 hover:bg-cyan-400/10"

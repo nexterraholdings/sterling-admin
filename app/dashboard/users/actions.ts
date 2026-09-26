@@ -4,6 +4,8 @@ import { supabaseAdmin, supabaseAdminIsMock } from "@/lib/supabase/server";
 import { requireAdmin, OPERATOR_ROLES } from "@/app/dashboard/lib/dal";
 import { logAdminAction, describeUser } from "@/app/dashboard/lib/audit-log";
 import { PROP_ACCOUNT_EMAIL_PATTERN, EXCLUDE_PROP_ACCOUNT_EMAIL_OR } from "@/lib/prop-accounts";
+import { saveAccountVoice } from "@/lib/prop-voice-store";
+import type { PropVoice } from "@/lib/prop-voice";
 import type { AuthUserRow, UserDeleteTarget, UserProfile } from "@/lib/types";
 
 const PAGE_SIZE = 20;
@@ -534,6 +536,23 @@ async function verifyAuthUserGone(id: string): Promise<void> {
   }
 }
 
+function isMissingAuthUser(message: string | undefined): boolean {
+  const lower = (message ?? "").toLowerCase();
+  return lower.includes("user not found") || lower.includes("not found in auth.users");
+}
+
+async function removeLeftoverProfile(id: string): Promise<void> {
+  const context = "Could not delete leftover profile";
+  await clearAuthDeleteBlockers(id, context);
+  await deleteByColumn("admin_prop_folder_members", "user_id", id, context);
+  await deleteByColumn("connections", "requester_id", id, context);
+  await deleteByColumn("connections", "addressee_id", id, context);
+  await deleteByColumn("follows", "follower_id", id, context);
+  await deleteByColumn("follows", "followee_id", id, context);
+  const { error } = await supabaseAdmin.from("profiles").delete().eq("id", id);
+  if (error) throw new Error(`${context}: ${error.message}`);
+}
+
 export async function deleteUserAccount(id: string): Promise<void> {
   await requireServiceRole();
 
@@ -560,8 +579,7 @@ export async function deleteUserAccount(id: string): Promise<void> {
     p_user_id: id,
   });
 
-  const rpcRemovedUser = !rpcError && !(await authUserExists(id));
-  if (!rpcRemovedUser) {
+  if (await authUserExists(id)) {
     const why = rpcError?.message ?? "auth user still present after RPC";
     await clearAuthDeleteBlockers(id, `Could not delete user (${why})`);
 
@@ -569,7 +587,7 @@ export async function deleteUserAccount(id: string): Promise<void> {
       id,
       false
     );
-    if (authError) {
+    if (authError && !isMissingAuthUser(authError.message)) {
       throw new Error(
         `Could not delete Auth user: ${authError.message}${
           rpcError ? ` (RPC: ${rpcError.message})` : ""
@@ -578,7 +596,13 @@ export async function deleteUserAccount(id: string): Promise<void> {
     }
   }
 
-  await verifyAuthUserGone(id);
+  if (await authUserExists(id)) {
+    throw new Error(
+      "Auth user still exists after delete. A foreign key is likely blocking auth.users deletion — check Supabase logs."
+    );
+  }
+
+  await removeLeftoverProfile(id);
 
   await logAdminAction({
     category: "admin",
@@ -766,6 +790,12 @@ export async function updateProAccount(
   };
 }
 
+export async function savePropAccountVoice(accountId: string, voice: PropVoice): Promise<void> {
+  await requireAdmin(OPERATOR_ROLES);
+  await requireServiceRole();
+  await saveAccountVoice(accountId, voice);
+}
+
 function sanitizeUsername(raw: string, fallback: string): string {
   const cleaned = raw
     .trim()
@@ -773,6 +803,68 @@ function sanitizeUsername(raw: string, fallback: string): string {
     .replace(/[^a-z0-9_]+/g, "_")
     .replace(/^_+|_+$/g, "");
   return cleaned || fallback;
+}
+
+function clipUsername(value: string): string {
+  return value.replace(/^_+|_+$/g, "").slice(0, 20);
+}
+
+function usernameChoicesFromName(fullName: string): string[] {
+  const parts = fullName
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const first = (parts[0] ?? "user").slice(0, 16);
+  const last = parts.length > 1 ? parts[parts.length - 1]!.slice(0, 16) : "";
+  const bases = [
+    last ? `${first}${last}` : first,
+    last ? `${first}_${last}` : "",
+    last ? `${first}${last.slice(0, 1)}` : "",
+    last ? `${first.slice(0, 1)}${last}` : "",
+    last ? `${last}_${first}` : "",
+    first.length >= 3 ? first : "",
+  ]
+    .map(clipUsername)
+    .filter((base) => base.length >= 2);
+  const uniqueBases = [...new Set(bases)];
+  const choices = [...uniqueBases];
+  for (let suffix = 2; suffix <= 40; suffix += 1) {
+    const tail = String(suffix);
+    for (const base of uniqueBases) {
+      choices.push(clipUsername(`${base.slice(0, 20 - tail.length)}${tail}`));
+    }
+  }
+  return [...new Set(choices.filter(Boolean))];
+}
+
+function isUsernameTakenError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("duplicate") || lower.includes("unique") || lower.includes("already");
+}
+
+async function takenUsernameSet(candidates: string[]): Promise<Set<string>> {
+  const taken = new Set<string>();
+  for (let index = 0; index < candidates.length; index += 80) {
+    const slice = candidates.slice(index, index + 80);
+    const { data, error } = await supabaseAdmin.from("profiles").select("username").in("username", slice);
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      const username = String(row.username ?? "").trim().toLowerCase();
+      if (username) taken.add(username);
+    }
+  }
+  return taken;
+}
+
+async function pickPropUsername(fullName: string, requested: string): Promise<string> {
+  const choices = requested ? [requested] : usernameChoicesFromName(fullName);
+  for (let index = 0; index < choices.length; index += 40) {
+    const slice = choices.slice(index, index + 40);
+    const taken = await takenUsernameSet(slice);
+    const open = slice.find((choice) => !taken.has(choice));
+    if (open) return open;
+  }
+  throw new Error(requested ? "That username is already taken." : "Could not find an open username for this name.");
 }
 
 export async function generateProAccount(formData: FormData): Promise<{
@@ -788,17 +880,27 @@ export async function generateProAccount(formData: FormData): Promise<{
   await requireServiceRole();
 
   const stamp = Math.round(Date.now() / 1000);
-  const rand = Math.round(Math.random() * 99999);
   const email = `creator-${stamp}-${Math.round(Math.random() * 9999)}@sterlingtest.local`;
-  const fallbackUsername = `creator_${rand}_${stamp}`;
   const name = String(formData.get("full_name") ?? "").trim() || "Pro Creator Test";
-  const username = sanitizeUsername(String(formData.get("username") ?? ""), fallbackUsername);
+  const requestedUsername = sanitizeUsername(String(formData.get("username") ?? ""), "");
+  let username = await pickPropUsername(name, requestedUsername);
+  const includeBio = formData.get("include_bio");
+  const providedBio = String(formData.get("bio") ?? "").trim();
   const bio =
-    String(formData.get("bio") ?? "").trim() || "Creator test account seeded for product demos and smoke testing.";
+    includeBio === "0"
+      ? ""
+      : includeBio === "1"
+        ? providedBio
+        : providedBio || "Creator test account seeded for product demos and smoke testing.";
   const accountRole = String(formData.get("account_role") ?? "creator").trim();
   const avatarEntry = formData.get("avatar");
   const avatar = avatarEntry instanceof File && avatarEntry.size > 0 ? avatarEntry : null;
   const password = "DemoPassword123!";
+  const rawFakeConnections = formData.get("fake_connections");
+  const explicitFakeConnections = rawFakeConnections != null && String(rawFakeConnections).trim() !== "";
+  const fakeConnectionCount = explicitFakeConnections
+    ? Math.min(500, Math.max(0, Math.round(Number(rawFakeConnections) || 0)))
+    : 12;
 
   const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email,
@@ -854,24 +956,37 @@ export async function generateProAccount(formData: FormData): Promise<{
     bio,
     operating_markets: [],
     main_goals: [],
-    fake_connection_count: 12,
+    fake_connection_count: fakeConnectionCount,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
-  const { error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .upsert(profilePayload, { onConflict: "id" });
+  let profileError = (await supabaseAdmin.from("profiles").upsert(profilePayload, { onConflict: "id" })).error;
+  if (profileError && !requestedUsername && isUsernameTakenError(profileError.message || "")) {
+    const remaining = usernameChoicesFromName(name).filter((choice) => choice !== username).slice(0, 12);
+    for (const choice of remaining) {
+      const retry = await supabaseAdmin
+        .from("profiles")
+        .upsert({ ...profilePayload, username: choice }, { onConflict: "id" });
+      if (!retry.error) {
+        username = choice;
+        profileError = null;
+        break;
+      }
+      profileError = retry.error;
+      if (!isUsernameTakenError(retry.error.message || "")) break;
+    }
+  }
   if (profileError) {
     await supabaseAdmin.auth.admin.deleteUser(userId, false).catch(() => undefined);
-    throw new Error(profileError.message);
+    const message = profileError.message || "Could not save the prop account";
+    if (isUsernameTakenError(message)) throw new Error("That username is already taken.");
+    throw new Error(message);
   }
 
-  const { data: sampleProfiles, error: sampleError } = await supabaseAdmin
-    .from("profiles")
-    .select("id")
-    .neq("id", userId)
-    .limit(12);
+  const { data: sampleProfiles, error: sampleError } = explicitFakeConnections
+    ? { data: [], error: null }
+    : await supabaseAdmin.from("profiles").select("id").neq("id", userId).limit(12);
 
   if (!sampleError && (sampleProfiles ?? []).length > 0) {
     const targetIds = (sampleProfiles ?? [])

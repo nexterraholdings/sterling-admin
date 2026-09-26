@@ -78,7 +78,7 @@ function formatRelativeTime(dateStr: string): string {
 
 function LogRow({ log }: { log: AuditLogEntry }) {
   return (
-    <div className="flex items-start gap-4 rounded-2xl border border-zinc-800 bg-zinc-800/60 p-4 transition hover:border-zinc-700">
+    <div className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-800/60 p-4 transition hover:border-zinc-700 sm:flex-row sm:items-start">
       <span className="mt-0.5 text-lg text-zinc-500">{typeIcons[log.category]}</span>
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-zinc-50">{actionLabel(log.action)}</p>
@@ -99,7 +99,7 @@ function LogRow({ log }: { log: AuditLogEntry }) {
           )}
         </div>
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1.5">
+      <div className="flex shrink-0 items-center justify-between gap-2 sm:flex-col sm:items-end">
         <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${typeColors[log.category]}`}>
           {log.category}
         </span>

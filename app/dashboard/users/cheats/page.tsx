@@ -1,5 +1,5 @@
-import { CheatsView } from "../CheatsView";
+import { redirect } from "next/navigation";
 
 export default function CheatsPage() {
-  return <CheatsView />;
+  redirect("/dashboard/cheats");
 }

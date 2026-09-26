@@ -260,7 +260,7 @@ export function BlogEditorClient({ post }: { post: BlogPost | null }) {
 
   return (
     <div className="-m-4 flex h-[calc(100dvh-4.85rem)] flex-col bg-zinc-950 sm:-m-6 sm:h-[calc(100dvh-5.35rem)] lg:-m-8">
-      <header className="flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900/90 px-3 py-2.5 backdrop-blur sm:px-5">
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-800 bg-zinc-900/90 px-3 py-2.5 backdrop-blur sm:gap-3 sm:px-5">
         <button
           type="button"
           onClick={() => router.push("/dashboard/blog")}

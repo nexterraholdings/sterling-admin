@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent a
 import { useRouter } from "next/navigation";
 import { ChevronRight, Folder } from "lucide-react";
 import { toast } from "sonner";
-import { deleteUserAccount, updateProAccount } from "@/app/dashboard/users/actions";
+import { deleteUserAccount, savePropAccountVoice, updateProAccount } from "@/app/dashboard/users/actions";
 import { AccountMenu, EditAccountDialog, FolderMenu } from "@/app/dashboard/users/prop-accounts/PropAccountsView";
 import { readApiJson } from "@/app/dashboard/users/seeding-content/shared";
 import type { PropDirectoryAccount, PropDirectoryFolder } from "@/lib/groups/propFolders";
 import type { ConversationFolder, ConversationPersona } from "@/lib/conversations/types";
+import { sanitizePropVoice, type PropVoice } from "@/lib/prop-voice";
 
 const inputCls =
   "w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-600 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/15 disabled:opacity-50";
@@ -47,6 +48,15 @@ function asDirectoryAccount(persona: ConversationPersona): PropDirectoryAccount 
     bio: persona.bio,
     createdAt: null,
     folderIds: persona.folderId ? [persona.folderId] : [],
+    voice: {
+      personality: persona.personality,
+      swear: persona.swear,
+      swearRate: persona.swearRate,
+      grammar: persona.grammar,
+      abbrev: persona.abbrev,
+      behavior: persona.behavior,
+      traits: persona.traits,
+    },
   };
 }
 
@@ -465,9 +475,10 @@ export function ConversationDirectory({
     await assignAccounts([accountId], folderId);
   }
 
-  async function saveAccount(next: { fullName: string; username: string; bio: string; avatar: File | null }) {
+  async function saveAccount(next: { fullName: string; username: string; bio: string; avatar: File | null; voice: PropVoice }) {
     if (!editorAccountId || organizing) return;
     const accountId = editorAccountId;
+    const voice = sanitizePropVoice(next.voice);
     setOrganizing(true);
     try {
       const formData = new FormData();
@@ -476,6 +487,7 @@ export function ConversationDirectory({
       formData.set("bio", next.bio);
       if (next.avatar) formData.set("avatar", next.avatar);
       const saved = await updateProAccount(accountId, formData);
+      await savePropAccountVoice(accountId, voice);
       onPersonas(
         personas.map((persona) =>
           persona.userId === accountId
@@ -485,6 +497,13 @@ export function ConversationDirectory({
                 username: saved.username,
                 bio: saved.bio ?? "",
                 avatarUrl: saved.avatarUrl,
+                personality: voice.personality,
+                swear: voice.swear,
+                swearRate: voice.swearRate,
+                grammar: voice.grammar,
+                abbrev: voice.abbrev,
+                behavior: voice.behavior,
+                traits: voice.traits,
               }
             : persona,
         ),
@@ -582,7 +601,7 @@ export function ConversationDirectory({
         onPointerMove={onBoardPointerMove}
         onPointerUp={onBoardPointerUp}
         onPointerCancel={onBoardPointerUp}
-        className={`relative mt-3 grid min-h-72 grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] content-start gap-3 ${marquee ? "select-none" : ""}`}
+        className={`relative mt-3 grid min-h-72 grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] content-start gap-3 ${marquee ? "select-none" : ""}`}
       >
         {openFolder ? (
           <div
@@ -694,6 +713,13 @@ export function ConversationDirectory({
                 }
                 setSelectedIds([persona.userId]);
                 onSelectAccount(persona.userId);
+              }}
+              onDoubleClick={(event) => {
+                event.preventDefault();
+                if (suppressClick.current) return;
+                setSelectedIds([persona.userId]);
+                onSelectAccount(persona.userId);
+                setEditorAccountId(persona.userId);
               }}
               onDragStart={(event) => {
                 const ids = selectedIds.includes(persona.userId) ? selectedIds : [persona.userId];

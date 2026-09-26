@@ -8,14 +8,19 @@ import {
   deleteTemplate,
   type NotificationTemplate,
 } from "@/app/dashboard/notifications/actions";
-import { SystemNotificationsTable } from "@/app/dashboard/notifications/SystemNotificationsTable";
 import { CustomNotificationTypesPanel } from "@/app/dashboard/notifications/definitions/CustomNotificationTypesPanel";
 import { CustomBroadcastPanel } from "@/app/dashboard/notifications/CustomBroadcastPanel";
+import { NotificationActivityPanel } from "@/app/dashboard/notifications/NotificationActivityPanel";
+import { SystemNotificationsTable } from "@/app/dashboard/notifications/SystemNotificationsTable";
+import { Tabs } from "@/components/dashboard/Tabs";
 
 const inputCls =
   "w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-500 focus:border-zinc-500 focus:ring-2 focus:ring-zinc-700";
 
+type NotificationsTab = "inbox" | "copy" | "setup" | "send";
+
 export function NotificationsView() {
+  const [tab, setTab] = useState<NotificationsTab>("inbox");
   const [definitionsVersion, setDefinitionsVersion] = useState(0);
   const handleDefinitionsChange = useCallback(() => {
     setDefinitionsVersion((v) => v + 1);
@@ -103,17 +108,99 @@ export function NotificationsView() {
 
   return (
     <div className="space-y-6">
-      <CustomNotificationTypesPanel onDefinitionsChange={handleDefinitionsChange} />
-      <SystemNotificationsTable />
+      <div>
+        <h2 className="text-lg font-semibold text-zinc-50">Notifications</h2>
+        <p className="mt-1 max-w-2xl text-sm text-zinc-500">
+          What went out, the title and message each type uses, and the custom types you can send.
+        </p>
+      </div>
 
-      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
-        <div className="flex items-center justify-between gap-2">
+      <Tabs
+        tabs={[
+          { id: "inbox", label: "Inbox", color: "blue" },
+          { id: "copy", label: "Copy", color: "emerald" },
+          { id: "setup", label: "Setup", color: "amber" },
+          { id: "send", label: "Send", color: "violet" },
+        ]}
+        defaultTab="inbox"
+        variant="segmented"
+        onChange={(id) => setTab(id as NotificationsTab)}
+      />
+
+      {tab === "inbox" && <NotificationActivityPanel />}
+
+      {tab === "copy" && <SystemNotificationsTable />}
+
+      {tab === "setup" && (
+        <div className="space-y-6">
+          <CustomNotificationTypesPanel onDefinitionsChange={handleDefinitionsChange} />
+          <TemplatesPanel
+            templates={templates}
+            templatesLoading={templatesLoading}
+            templatesError={templatesError}
+            formMode={formMode}
+            formName={formName}
+            formMessage={formMessage}
+            savingTemplate={savingTemplate}
+            deletingId={deletingId}
+            onNameChange={setFormName}
+            onMessageChange={setFormMessage}
+            onOpenNew={openNewTemplateForm}
+            onOpenEdit={openEditTemplateForm}
+            onSave={handleSaveTemplateForm}
+            onCancel={closeTemplateForm}
+            onDelete={handleDeleteTemplate}
+          />
+        </div>
+      )}
+
+      {tab === "send" && <CustomBroadcastPanel definitionsVersion={definitionsVersion} />}
+    </div>
+  );
+}
+
+function TemplatesPanel({
+  templates,
+  templatesLoading,
+  templatesError,
+  formMode,
+  formName,
+  formMessage,
+  savingTemplate,
+  deletingId,
+  onNameChange,
+  onMessageChange,
+  onOpenNew,
+  onOpenEdit,
+  onSave,
+  onCancel,
+  onDelete,
+}: {
+  templates: NotificationTemplate[];
+  templatesLoading: boolean;
+  templatesError: string | null;
+  formMode: "closed" | "new" | "edit";
+  formName: string;
+  formMessage: string;
+  savingTemplate: boolean;
+  deletingId: string | null;
+  onNameChange: (value: string) => void;
+  onMessageChange: (value: string) => void;
+  onOpenNew: () => void;
+  onOpenEdit: (template: NotificationTemplate) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+      <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-lg font-semibold text-zinc-50">Broadcast templates</h3>
           <button
             type="button"
-            onClick={() => openNewTemplateForm()}
+            onClick={onOpenNew}
             disabled={formMode !== "closed"}
-            className="rounded-full bg-white px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-11 self-start rounded-full bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:py-2"
           >
             + New template
           </button>
@@ -127,7 +214,7 @@ export function NotificationsView() {
             <input
               className={inputCls}
               value={formName}
-              onChange={(e) => setFormName(e.target.value)}
+              onChange={(e) => onNameChange(e.target.value)}
               placeholder="Template name"
               maxLength={60}
               autoFocus
@@ -136,24 +223,24 @@ export function NotificationsView() {
               rows={3}
               className={`${inputCls} resize-none`}
               value={formMessage}
-              onChange={(e) => setFormMessage(e.target.value)}
+              onChange={(e) => onMessageChange(e.target.value)}
               placeholder="Template message…"
               maxLength={200}
             />
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleSaveTemplateForm}
+                onClick={onSave}
                 disabled={!formName.trim() || !formMessage.trim() || savingTemplate}
-                className="shrink-0 rounded-full bg-white px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+                className="min-h-11 shrink-0 rounded-full bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:py-2"
               >
                 {savingTemplate ? "Saving…" : "Save"}
               </button>
               <button
                 type="button"
-                onClick={closeTemplateForm}
+                onClick={onCancel}
                 disabled={savingTemplate}
-                className="shrink-0 rounded-full border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="min-h-11 shrink-0 rounded-full border border-zinc-800 bg-zinc-900 px-4 text-sm font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:py-2"
               >
                 Cancel
               </button>
@@ -181,26 +268,26 @@ export function NotificationsView() {
               {templates.map((t) => (
                 <div
                   key={t.id}
-                  className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-800 px-4 py-3"
+                  className="flex flex-col gap-3 rounded-2xl border border-zinc-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
                     <p className="truncate font-medium text-zinc-50">{t.name}</p>
                     <p className="truncate text-xs text-zinc-500">{t.message}</p>
                   </div>
-                  <div className="flex shrink-0 gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:shrink-0">
                     <button
                       type="button"
-                      onClick={() => openEditTemplateForm(t)}
+                      onClick={() => onOpenEdit(t)}
                       disabled={formMode !== "closed"}
-                      className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="min-h-11 rounded-full border border-zinc-800 bg-zinc-900 px-3 text-sm font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:py-1.5 sm:text-xs"
                     >
                       Edit
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDeleteTemplate(t.id)}
+                      onClick={() => onDelete(t.id)}
                       disabled={deletingId === t.id}
-                      className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:border-rose-500/50 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="min-h-11 rounded-full border border-rose-500/30 bg-rose-500/10 px-3 text-sm font-medium text-rose-300 transition hover:border-rose-500/50 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:py-1.5 sm:text-xs"
                     >
                       {deletingId === t.id ? "Deleting…" : "Delete"}
                     </button>
@@ -211,8 +298,5 @@ export function NotificationsView() {
           )}
         </div>
       </div>
-
-      <CustomBroadcastPanel definitionsVersion={definitionsVersion} />
-    </div>
   );
 }

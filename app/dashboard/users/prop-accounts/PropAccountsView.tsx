@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Folder } from "lucide-react";
+import { ChevronRight, Folder, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/admin/ui";
-import { deleteUserAccount, updateProAccount } from "@/app/dashboard/users/actions";
+import { deleteUserAccount, generateProAccount, savePropAccountVoice, updateProAccount } from "@/app/dashboard/users/actions";
 import { readApiJson } from "@/app/dashboard/users/seeding-content/shared";
 import type { PropAccountDirectory, PropDirectoryAccount, PropDirectoryFolder } from "@/lib/groups/propFolders";
+import { randomPropBio, randomPropName } from "@/lib/prop-accounts";
+import { EMPTY_PROP_VOICE, sanitizePropVoice, type PropVoice } from "@/lib/prop-voice";
+import { PropVoiceFields } from "@/app/dashboard/users/prop-accounts/PropVoiceFields";
 
 type Marquee = { left: number; top: number; width: number; height: number };
 
@@ -24,6 +27,7 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
   const boardRef = useRef<HTMLDivElement>(null);
   const marqueeOrigin = useRef<{ x: number; y: number } | null>(null);
   const dragIdsRef = useRef<string[]>([]);
+  const dragFolderRef = useRef<string | null>(null);
   const suppressClick = useRef(false);
   const [accounts, setAccounts] = useState(directory.accounts);
   const [folders, setFolders] = useState(directory.folders);
@@ -31,8 +35,10 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [dragIds, setDragIds] = useState<string[]>([]);
+  const [draggingFolderId, setDraggingFolderId] = useState<string | null>(null);
   const [dropFolderId, setDropFolderId] = useState<string | null>(null);
   const [movingIds, setMovingIds] = useState<string[]>([]);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
   const [menu, setMenu] = useState<{
     x: number;
@@ -43,6 +49,8 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
   const [folderName, setFolderName] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [creator, setCreator] = useState<null | "single" | "bulk">(null);
+  const [createProgress, setCreateProgress] = useState<{ done: number; total: number } | null>(null);
   const [accountMenu, setAccountMenu] = useState<{
     x: number;
     y: number;
@@ -113,7 +121,7 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
         ? term
           ? "Nothing matches this search."
           : openFolder
-            ? "This folder is empty."
+            ? null
             : "Nothing matches this search."
         : null;
 
@@ -218,15 +226,61 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
   }
 
   function allowDrop(event: DragEvent<HTMLElement>, folderId: string) {
-    if (dragIdsRef.current.length === 0 || movingIds.length > 0) return;
+    const sourceFolderId = dragFolderRef.current;
+    const draggingAccounts = dragIdsRef.current.length > 0;
+    if ((!sourceFolderId && !draggingAccounts) || movingIds.length > 0 || creatingFolder) return;
+    if (sourceFolderId) {
+      if (folderId === "trash") return;
+      if (folderId !== "main" && blockedFolderIds(folders, sourceFolderId).has(folderId)) return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     setDropFolderId((current) => (current === folderId ? current : folderId));
   }
 
+  function takeDraggedFolder(event: DragEvent<HTMLElement>): string | null {
+    const id = event.dataTransfer.getData("application/x-prop-folder") || dragFolderRef.current || "";
+    if (!id) return null;
+    dragFolderRef.current = null;
+    setDraggingFolderId(null);
+    setDropFolderId(null);
+    return id;
+  }
+
+  async function relocateFolder(folderId: string, parentId: string | null) {
+    if (creatingFolder) return;
+    if (parentId && blockedFolderIds(folders, folderId).has(parentId)) return;
+    const currentParent = folders.find((folder) => folder.id === folderId)?.parentId ?? null;
+    if ((parentId || null) === currentParent) return;
+    setCreatingFolder(true);
+    const previous = folders;
+    setFolders((current) => current.map((folder) => (folder.id === folderId ? { ...folder, parentId } : folder)));
+    setMenu(null);
+    try {
+      const res = await fetch(`/api/admin/prop-folders/${encodeURIComponent(folderId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parentId }),
+      });
+      const payload = await readApiJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(payload.error ?? "Failed to move folder");
+      toast.success(parentId ? "Moved folder." : "Moved folder to the main directory.");
+    } catch (error) {
+      setFolders(previous);
+      toast.error(error instanceof Error ? error.message : "Failed to move folder");
+    } finally {
+      setCreatingFolder(false);
+    }
+  }
+
   async function dropOnFolder(event: DragEvent<HTMLElement>, folder: PropDirectoryFolder) {
     event.preventDefault();
     event.stopPropagation();
+    const draggedFolderId = takeDraggedFolder(event);
+    if (draggedFolderId) {
+      await relocateFolder(draggedFolderId, folder.id);
+      return;
+    }
     const ids = readDragIds(event);
     const userIds = ids.filter((id) => {
       const account = accounts.find((item) => item.id === id);
@@ -270,6 +324,11 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
   async function dropOnMain(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
+    const draggedFolderId = takeDraggedFolder(event);
+    if (draggedFolderId) {
+      await relocateFolder(draggedFolderId, null);
+      return;
+    }
     if (!openFolder) return;
     const ids = readDragIds(event);
     const userIds = ids.filter((id) => {
@@ -303,6 +362,57 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
     } finally {
       setMovingIds([]);
     }
+  }
+
+  function dropOnTrash(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const ids = readDragIds(event);
+    if (ids.length === 0 || movingIds.length > 0 || creatingFolder) return;
+    setPendingDeleteIds(ids);
+  }
+
+  async function confirmTrashDelete() {
+    if (pendingDeleteIds.length === 0 || creatingFolder) return;
+    const ids = pendingDeleteIds;
+    const idSet = new Set(ids);
+    const previousAccounts = accounts;
+    const previousFolders = folders;
+    setCreatingFolder(true);
+    setAccounts((current) => current.filter((account) => !idSet.has(account.id)));
+    setFolders((current) =>
+      current.map((folder) => ({ ...folder, userIds: folder.userIds.filter((id) => !idSet.has(id)) })),
+    );
+    setSelectedIds((current) => current.filter((id) => !idSet.has(id)));
+    setPendingDeleteIds([]);
+    const failed = new Set<string>();
+    for (const id of ids) {
+      try {
+        await deleteUserAccount(id);
+      } catch (error) {
+        failed.add(id);
+        toast.error(error instanceof Error ? error.message : "Could not delete a prop account");
+      }
+    }
+    if (failed.size > 0) {
+      setAccounts((current) => {
+        const back = previousAccounts.filter((account) => failed.has(account.id));
+        const have = new Set(current.map((account) => account.id));
+        return [...back.filter((account) => !have.has(account.id)), ...current];
+      });
+      setFolders((current) =>
+        current.map((folder) => {
+          const previous = previousFolders.find((item) => item.id === folder.id);
+          const restore = (previous?.userIds ?? []).filter((id) => failed.has(id));
+          return { ...folder, userIds: [...new Set([...folder.userIds, ...restore])] };
+        }),
+      );
+    }
+    const removed = ids.length - failed.size;
+    if (removed > 0) {
+      toast.success(removed === 1 ? "Deleted 1 prop account." : `Deleted ${removed} prop accounts.`);
+    }
+    setCreatingFolder(false);
   }
 
   function openContextMenu(event: ReactMouseEvent, folderId: string | null) {
@@ -418,30 +528,8 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
     if (!menu?.folderId || creatingFolder) return;
     const folderId = menu.folderId;
     const parentId = moveTarget || null;
-    const currentParent = folders.find((folder) => folder.id === folderId)?.parentId ?? null;
-    if (parentId === currentParent) {
-      setMenu(null);
-      return;
-    }
-    setCreatingFolder(true);
-    const previous = folders;
-    setFolders((current) => current.map((folder) => (folder.id === folderId ? { ...folder, parentId } : folder)));
     setMenu(null);
-    try {
-      const res = await fetch(`/api/admin/prop-folders/${encodeURIComponent(folderId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parentId }),
-      });
-      const payload = await readApiJson<{ error?: string }>(res);
-      if (!res.ok) throw new Error(payload.error ?? "Failed to move folder");
-      toast.success(parentId ? "Moved folder." : "Moved folder to the main directory.");
-    } catch (error) {
-      setFolders(previous);
-      toast.error(error instanceof Error ? error.message : "Failed to move folder");
-    } finally {
-      setCreatingFolder(false);
-    }
+    await relocateFolder(folderId, parentId);
   }
 
   async function loadGroupChoices() {
@@ -520,9 +608,97 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
     });
   }
 
-  async function saveAccount(next: { fullName: string; username: string; bio: string; avatar: File | null }) {
+  async function createAccounts(input: {
+    count: number;
+    includeBio: boolean;
+    fullName: string;
+    username: string;
+    bio: string;
+    connectionMin: number | null;
+    connectionMax: number | null;
+  }) {
+    if (creatingFolder) return;
+    const folderId = openFolder?.id ?? null;
+    const place = openFolder?.name ?? "the main directory";
+    const total = Math.min(50, Math.max(1, Math.round(input.count) || 1));
+    setCreatingFolder(true);
+    setCreateProgress({ done: 0, total });
+    const created: PropDirectoryAccount[] = [];
+    const failures: string[] = [];
+    try {
+      for (let index = 0; index < total; index += 1) {
+        try {
+          const formData = new FormData();
+          const name = total === 1 ? input.fullName.trim() || randomPropName() : randomPropName();
+          formData.set("full_name", name);
+          if (total === 1 && input.username.trim()) formData.set("username", input.username.trim());
+          formData.set("include_bio", input.includeBio ? "1" : "0");
+          formData.set("bio", input.includeBio ? (total === 1 ? input.bio.trim() || randomPropBio() : randomPropBio()) : "");
+          formData.set("account_role", "creator");
+          if (input.connectionMin != null && input.connectionMax != null) {
+            const low = Math.min(input.connectionMin, input.connectionMax);
+            const high = Math.max(input.connectionMin, input.connectionMax);
+            const fakeConnections = low + Math.floor(Math.random() * (high - low + 1));
+            formData.set("fake_connections", String(fakeConnections));
+          }
+          const result = await generateProAccount(formData);
+          created.push({
+            id: result.userId,
+            username: result.username,
+            fullName: result.fullName,
+            avatarUrl: result.avatarUrl,
+            bio: result.bio || null,
+            createdAt: new Date().toISOString(),
+            folderIds: folderId ? [folderId] : [],
+            voice: { ...EMPTY_PROP_VOICE },
+          });
+        } catch (error) {
+          failures.push(error instanceof Error ? error.message : "Could not create a prop account");
+        }
+        setCreateProgress({ done: index + 1, total });
+      }
+
+      if (created.length > 0) {
+        if (folderId) {
+          const res = await fetch("/api/admin/prop-folders/assign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userIds: created.map((account) => account.id), folderId }),
+          });
+          const payload = await readApiJson<{ error?: string }>(res);
+          if (!res.ok) throw new Error(payload.error ?? "Created the accounts, but could not file them");
+          setFolders((current) =>
+            current.map((folder) =>
+              folder.id === folderId
+                ? { ...folder, userIds: [...folder.userIds, ...created.map((account) => account.id)] }
+                : folder,
+            ),
+          );
+        }
+        setAccounts((current) => [...created, ...current]);
+        toast.success(
+          created.length === 1
+            ? `Added ${accountName(created[0]!)} to ${place}.`
+            : `Added ${created.length} prop accounts to ${place}.`,
+        );
+      }
+      if (failures.length > 0) {
+        toast.error(failures.length === 1 ? failures[0]! : `${failures.length} accounts could not be created. ${failures[0]}`);
+      }
+      if (created.length > 0 && failures.length === 0) setCreator(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not add the prop accounts");
+      if (created.length > 0) router.refresh();
+    } finally {
+      setCreatingFolder(false);
+      setCreateProgress(null);
+    }
+  }
+
+  async function saveAccount(next: { fullName: string; username: string; bio: string; avatar: File | null; voice: PropVoice }) {
     if (!editorAccountId || creatingFolder) return;
     const accountId = editorAccountId;
+    const voice = sanitizePropVoice(next.voice);
     setCreatingFolder(true);
     try {
       const formData = new FormData();
@@ -531,6 +707,7 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
       formData.set("bio", next.bio);
       if (next.avatar) formData.set("avatar", next.avatar);
       const saved = await updateProAccount(accountId, formData);
+      await savePropAccountVoice(accountId, voice);
       setAccounts((current) =>
         current.map((account) =>
           account.id === accountId
@@ -540,6 +717,7 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
                 username: saved.username,
                 bio: saved.bio,
                 avatarUrl: saved.avatarUrl,
+                voice,
               }
             : account,
         ),
@@ -668,29 +846,60 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
             </span>
           )}
         </div>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search folders and accounts"
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-600 focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/15 sm:max-w-xs"
-        />
+        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+          <button
+            type="button"
+            onClick={() => setCreator("bulk")}
+            className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-100 hover:border-zinc-500"
+          >
+            Bulk prop accounts
+          </button>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search folders and accounts"
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-600 focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/15 sm:max-w-xs"
+          />
+        </div>
       </div>
 
-      {empty ? (
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-10 text-center text-sm text-zinc-500">
-          {empty}
-        </div>
-      ) : (
+      <div
+        ref={boardRef}
+        onPointerDown={onBoardPointerDown}
+        onPointerMove={onBoardPointerMove}
+        onPointerUp={onBoardPointerUp}
+        onPointerCancel={onBoardPointerUp}
+        className={`relative grid min-h-[70vh] grid-cols-[repeat(auto-fill,minmax(min(100%,11.5rem),1fr))] content-start gap-3 ${
+          marquee ? "select-none" : ""
+        }`}
+      >
         <div
-          ref={boardRef}
-          onPointerDown={onBoardPointerDown}
-          onPointerMove={onBoardPointerMove}
-          onPointerUp={onBoardPointerUp}
-          onPointerCancel={onBoardPointerUp}
-          className={`relative grid min-h-[70vh] grid-cols-[repeat(auto-fill,minmax(11.5rem,1fr))] content-start gap-3 ${
-            marquee ? "select-none" : ""
+          data-folder-id="trash"
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onDragOver={(event) => allowDrop(event, "trash")}
+          onDragLeave={(event) => {
+            const next = event.relatedTarget;
+            if (next instanceof Node && event.currentTarget.contains(next)) return;
+            setDropFolderId((current) => (current === "trash" ? null : current));
+          }}
+          onDrop={(event) => dropOnTrash(event)}
+          className={`flex flex-col gap-3 rounded-2xl border bg-zinc-900 p-4 ${
+            dropFolderId === "trash" ? "border-rose-300 bg-rose-400/10" : "border-zinc-800"
           }`}
         >
+          <Trash2 className={`pointer-events-none h-10 w-10 ${dropFolderId === "trash" ? "text-rose-200" : "text-rose-300"}`} />
+          <span className="pointer-events-none min-w-0">
+            <span className="block truncate text-sm font-semibold text-zinc-50">Trash</span>
+            <span className="mt-0.5 block truncate text-xs text-zinc-500">Drop accounts to delete</span>
+          </span>
+        </div>
+        {empty ? (
+          <p className="col-span-full px-1 py-6 text-center text-sm text-zinc-500">{empty}</p>
+        ) : (
+          <>
           {openFolder ? (
             <div
               role="button"
@@ -728,6 +937,7 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
                 role="button"
                 tabIndex={0}
                 data-folder-id={folder.id}
+                draggable={!creatingFolder}
                 onContextMenu={(event) => openContextMenu(event, folder.id)}
                 onClick={() => {
                   if (suppressClick.current) return;
@@ -740,6 +950,24 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
                   setSelectedIds([]);
                   setOpenFolderId(folder.id);
                 }}
+                onDragStart={(event) => {
+                  suppressClick.current = true;
+                  dragIdsRef.current = [];
+                  dragFolderRef.current = folder.id;
+                  event.dataTransfer.setData("application/x-prop-folder", folder.id);
+                  event.dataTransfer.setData("text/plain", folder.id);
+                  event.dataTransfer.effectAllowed = "move";
+                  setDraggingFolderId(folder.id);
+                  setDragIds([]);
+                }}
+                onDragEnd={() => {
+                  dragFolderRef.current = null;
+                  setDraggingFolderId(null);
+                  setDropFolderId(null);
+                  window.setTimeout(() => {
+                    suppressClick.current = false;
+                  }, 80);
+                }}
                 onDragOver={(event) => allowDrop(event, folder.id)}
                 onDragLeave={(event) => {
                   const next = event.relatedTarget;
@@ -747,14 +975,14 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
                   setDropFolderId((current) => (current === folder.id ? null : current));
                 }}
                 onDrop={(event) => void dropOnFolder(event, folder)}
-                className={`flex cursor-pointer flex-col gap-3 rounded-2xl border bg-zinc-900 p-4 text-left transition ${
+                className={`flex cursor-grab flex-col gap-3 rounded-2xl border bg-zinc-900 p-4 text-left transition active:cursor-grabbing ${
                   dropping
                     ? "border-amber-300 bg-amber-300/10"
                     : "border-zinc-800 hover:border-zinc-600 hover:bg-zinc-800/70"
-                }`}
+                } ${draggingFolderId === folder.id ? "opacity-40" : ""}`}
               >
-                <Folder className={`h-10 w-10 ${dropping ? "text-amber-200" : "text-amber-300"}`} />
-                <span className="min-w-0">
+                <Folder className={`pointer-events-none h-10 w-10 ${dropping ? "text-amber-200" : "text-amber-300"}`} />
+                <span className="pointer-events-none min-w-0">
                   <span className="block truncate text-sm font-semibold text-zinc-50">{folder.name}</span>
                   <span className="mt-0.5 block truncate text-xs text-zinc-500">
                     {folder.userIds.length} {folder.userIds.length === 1 ? "account" : "accounts"}
@@ -763,6 +991,11 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
               </div>
             );
           })}
+          {openFolder && visibleFolders.length === 0 && visibleAccounts.length === 0 && !term ? (
+            <p className="col-span-full px-1 py-6 text-sm text-zinc-500">
+              This folder is empty. Right-click to add a prop account.
+            </p>
+          ) : null}
           {visibleAccounts.map((account) => {
             const selected = selectedSet.has(account.id);
             const dragging = dragIds.includes(account.id);
@@ -783,6 +1016,12 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
                     return;
                   }
                   setSelectedIds([account.id]);
+                }}
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  if (suppressClick.current || moving) return;
+                  setSelectedIds([account.id]);
+                  setEditorAccountId(account.id);
                 }}
                 onDragStart={(event) => {
                   const ids = selectedSet.has(account.id) ? activeSelection : [account.id];
@@ -834,8 +1073,9 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
               style={{ left: marquee.left, top: marquee.top, width: marquee.width, height: marquee.height }}
             />
           ) : null}
-        </div>
-      )}
+          </>
+        )}
+      </div>
       {menu ? (
         <FolderMenu
           menu={menu}
@@ -847,6 +1087,14 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
           onMoveTarget={setMoveTarget}
           onMode={(mode) => setMenu((current) => (current ? { ...current, mode } : current))}
           onCreate={() => void createFolder()}
+          onNewAccount={() => {
+            setMenu(null);
+            setCreator("single");
+          }}
+          onBulkAccounts={() => {
+            setMenu(null);
+            setCreator("bulk");
+          }}
           onRename={() => void renameFolder()}
           onDelete={() => void deleteFolder()}
           onMove={() => void moveFolder()}
@@ -893,6 +1141,30 @@ export function PropAccountsView({ directory }: { directory: PropAccountDirector
           onConfirm={() => void addAccountsToGroup()}
         />
       ) : null}
+      {pendingDeleteIds.length > 0 ? (
+        <TrashConfirmDialog
+          accounts={accounts.filter((account) => pendingDeleteIds.includes(account.id))}
+          busy={creatingFolder}
+          onClose={() => {
+            if (creatingFolder) return;
+            setPendingDeleteIds([]);
+          }}
+          onConfirm={() => void confirmTrashDelete()}
+        />
+      ) : null}
+      {creator ? (
+        <CreatePropAccountDialog
+          mode={creator}
+          folderName={openFolder?.name ?? "Main directory"}
+          busy={creatingFolder}
+          progress={createProgress}
+          onClose={() => {
+            if (creatingFolder) return;
+            setCreator(null);
+          }}
+          onCreate={(input) => void createAccounts(input)}
+        />
+      ) : null}
       {editorAccountId ? (
         <EditAccountDialog
           account={accounts.find((account) => account.id === editorAccountId) ?? null}
@@ -929,6 +1201,8 @@ export function FolderMenu({
   onMoveTarget,
   onMode,
   onCreate,
+  onNewAccount,
+  onBulkAccounts,
   onRename,
   onDelete,
   onMove,
@@ -947,6 +1221,8 @@ export function FolderMenu({
   onMoveTarget: (value: string) => void;
   onMode: (mode: "create" | "name" | "actions" | "rename" | "move" | "delete") => void;
   onCreate: () => void;
+  onNewAccount?: () => void;
+  onBulkAccounts?: () => void;
   onRename: () => void;
   onDelete: () => void;
   onMove: () => void;
@@ -969,9 +1245,21 @@ export function FolderMenu({
       style={{ left: menu.x, top: menu.y }}
     >
       {menu.mode === "create" ? (
-        <button type="button" onClick={() => onMode("name")} className={itemCls}>
-          New folder
-        </button>
+        <>
+          <button type="button" onClick={() => onMode("name")} className={itemCls}>
+            New folder
+          </button>
+          {onNewAccount ? (
+            <button type="button" onClick={onNewAccount} className={itemCls}>
+              New prop account
+            </button>
+          ) : null}
+          {onBulkAccounts ? (
+            <button type="button" onClick={onBulkAccounts} className={itemCls}>
+              Bulk prop accounts
+            </button>
+          ) : null}
+        </>
       ) : null}
       {menu.mode === "name" || menu.mode === "rename" ? (
         <form
@@ -1285,11 +1573,12 @@ export function EditAccountDialog({
   account: PropDirectoryAccount | null;
   busy: boolean;
   onClose: () => void;
-  onSave: (next: { fullName: string; username: string; bio: string; avatar: File | null }) => void;
+  onSave: (next: { fullName: string; username: string; bio: string; avatar: File | null; voice: PropVoice }) => void;
 }) {
   const [fullName, setFullName] = useState(account?.fullName ?? "");
   const [username, setUsername] = useState(account?.username ?? "");
   const [bio, setBio] = useState(account?.bio ?? "");
+  const [voice, setVoice] = useState<PropVoice>(account?.voice ?? { ...EMPTY_PROP_VOICE });
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(account?.avatarUrl ?? null);
   const fieldCls =
@@ -1316,11 +1605,11 @@ export function EditAccountDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={onClose}>
       <form
         data-folder-menu
-        className="w-full max-w-md rounded-3xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
+        className="flex max-h-[min(92vh,56rem)] w-full max-w-xl flex-col rounded-3xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          onSave({ fullName, username, bio, avatar: avatarFile });
+          onSave({ fullName, username, bio, avatar: avatarFile, voice });
         }}
       >
         <div className="flex items-start justify-between gap-3">
@@ -1332,7 +1621,8 @@ export function EditAccountDialog({
             Close
           </button>
         </div>
-        <div className="mt-5 flex items-center gap-4">
+        <div className="mt-5 min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="flex items-center gap-4">
           <div className="h-20 w-20 overflow-hidden rounded-full border border-zinc-700 bg-zinc-950">
             {avatarPreview ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -1369,6 +1659,16 @@ export function EditAccountDialog({
             onChange={(event) => setBio(event.target.value)}
           />
         </label>
+        <div className="mt-6 border-t border-zinc-800 pt-5">
+          <p className="text-sm font-medium text-zinc-100">Behavior</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Age, interests, and temperament change what this account talks about and how they phrase it. Cuss words, grammar, and abbreviations can follow the conversation. Behavior notes always control this account.
+          </p>
+          <div className="mt-4">
+            <PropVoiceFields voice={voice} disabled={busy} fieldClassName={fieldCls} onChange={setVoice} />
+          </div>
+        </div>
+        </div>
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200">
             Cancel
@@ -1379,6 +1679,391 @@ export function EditAccountDialog({
             className="rounded-xl bg-violet-400 px-3 py-2 text-sm font-medium text-zinc-950 disabled:opacity-50"
           >
             {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function TrashConfirmDialog({
+  accounts: queued,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  accounts: PropDirectoryAccount[];
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const preview = queued.slice(0, 6);
+  const extra = queued.length - preview.length;
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={onClose}>
+      <div
+        data-folder-menu
+        className="w-full max-w-md rounded-3xl border border-rose-400/30 bg-zinc-900 p-5 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-rose-300/80">Delete</p>
+        <h2 className="mt-1 text-lg font-semibold text-zinc-50">
+          Delete {queued.length === 1 ? "this prop account" : `${queued.length} prop accounts`}?
+        </h2>
+        <ul className="mt-4 space-y-1 text-sm text-zinc-300">
+          {preview.map((account) => (
+            <li key={account.id} className="truncate">
+              {accountName(account)}
+            </li>
+          ))}
+          {extra > 0 ? <li className="text-zinc-500">and {extra} more</li> : null}
+        </ul>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy || queued.length === 0}
+            className="rounded-xl bg-rose-400 px-3 py-2 text-sm font-medium text-zinc-950 disabled:opacity-50"
+          >
+            {busy ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const CREATE_PHASES = [
+  "allocating identity",
+  "resolving handle",
+  "writing profile",
+  "seeding connections",
+  "filing account",
+];
+
+function CreateSequence({ progress }: { progress: { done: number; total: number } | null }) {
+  const total = Math.max(1, progress?.total ?? 1);
+  const done = progress?.done ?? 0;
+  const ratio = Math.min(1, done / total);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((current) => current + 1), 160);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const phase = CREATE_PHASES[tick % CREATE_PHASES.length] ?? CREATE_PHASES[0];
+  const signal = Array.from({ length: 6 }, (_, index) => ((tick * 19 + index * 37) % 256).toString(16).padStart(2, "0")).join(" ");
+  const log = Array.from({ length: 4 }, (_, index) => {
+    const phaseIndex = (tick + index) % CREATE_PHASES.length;
+    return CREATE_PHASES[phaseIndex] ?? CREATE_PHASES[0];
+  });
+
+  return (
+    <div className="relative mt-4 overflow-hidden rounded-2xl border border-cyan-400/30 bg-zinc-950 p-4 shadow-[inset_0_0_40px_rgba(34,211,238,0.06)]">
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-transparent via-cyan-300/25 to-transparent"
+        style={{ animation: "prop-scan 2.4s linear infinite" }}
+      />
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(34,211,238,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.08) 1px, transparent 1px)",
+          backgroundSize: "18px 18px",
+        }}
+      />
+      <div className="relative flex items-center gap-4">
+        <div className="relative h-16 w-16 shrink-0">
+          <div
+            className="absolute inset-0 rounded-full border border-cyan-300/50"
+            style={{ animation: "prop-spin 2.8s linear infinite" }}
+          />
+          <div
+            className="absolute inset-1.5 rounded-full border border-dashed border-violet-300/70"
+            style={{ animation: "prop-spin-reverse 4.5s linear infinite" }}
+          />
+          <div
+            className="absolute inset-0 m-auto h-2.5 w-2.5 rounded-full bg-cyan-200 shadow-[0_0_16px_#67e8f9]"
+            style={{ animation: "prop-core 1.15s ease-in-out infinite" }}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-cyan-300/80">Sequence live</p>
+          <p className="mt-1 font-mono text-sm text-zinc-50">
+            {phase}
+            <span
+              className="ml-1 inline-block h-3.5 w-1.5 translate-y-0.5 bg-cyan-300"
+              style={{ animation: "prop-blink 1s steps(1) infinite" }}
+            />
+          </p>
+          <p className="mt-1 truncate font-mono text-[10px] tracking-widest text-zinc-500">{signal}</p>
+        </div>
+        <p className="font-mono text-sm tabular-nums text-cyan-100">
+          {String(done).padStart(2, "0")}
+          <span className="text-zinc-600">/{String(total).padStart(2, "0")}</span>
+        </p>
+      </div>
+      <div className="relative mt-4 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-violet-400 transition-[width] duration-500"
+          style={{ width: `${Math.round(ratio * 100)}%` }}
+        />
+        <div
+          className="absolute inset-y-0 w-1/4 bg-gradient-to-r from-transparent via-white/70 to-transparent"
+          style={{ animation: "prop-shimmer 1.35s linear infinite" }}
+        />
+      </div>
+      <div className="relative mt-3 space-y-1 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+        {log.map((line, index) => (
+          <p key={`${line}-${index}`} className={index === log.length - 1 ? "text-cyan-200/90" : ""}>
+            <span className="text-zinc-600">{String(index + 1).padStart(2, "0")}</span> {line}
+          </p>
+        ))}
+      </div>
+      {total > 1 ? (
+        <div className="relative mt-3 grid grid-cols-10 gap-1">
+          {Array.from({ length: total }, (_, index) => (
+            <span
+              key={index}
+              className={`h-1.5 rounded-sm transition-colors ${
+                index < done ? "bg-cyan-300 shadow-[0_0_8px_#67e8f9]" : "bg-zinc-800"
+              }`}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CreatePropAccountDialog({
+  mode,
+  folderName,
+  busy,
+  progress,
+  onClose,
+  onCreate,
+}: {
+  mode: "single" | "bulk";
+  folderName: string;
+  busy: boolean;
+  progress: { done: number; total: number } | null;
+  onClose: () => void;
+  onCreate: (input: {
+    count: number;
+    includeBio: boolean;
+    fullName: string;
+    username: string;
+    bio: string;
+    connectionMin: number | null;
+    connectionMax: number | null;
+  }) => void;
+}) {
+  const [fullName, setFullName] = useState("");
+  const [username, setUsername] = useState("");
+  const [count, setCount] = useState(5);
+  const [includeBio, setIncludeBio] = useState(false);
+  const [bio, setBio] = useState("");
+  const [connectionMin, setConnectionMin] = useState(5);
+  const [connectionMax, setConnectionMax] = useState(40);
+  const fieldCls =
+    "w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none focus:border-violet-400";
+  const bulk = mode === "bulk";
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  function chooseBio(next: boolean) {
+    setIncludeBio(next);
+    if (next && !bio.trim()) setBio(randomPropBio());
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={onClose}>
+      <form
+        data-folder-menu
+        className={`w-full max-w-md rounded-3xl border bg-zinc-900 p-5 shadow-2xl ${
+          busy ? "border-cyan-400/40 shadow-[0_0_48px_rgba(34,211,238,0.14)]" : "border-zinc-700"
+        }`}
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onCreate({
+            count: bulk ? count : 1,
+            includeBio,
+            fullName,
+            username,
+            bio,
+            connectionMin: bulk ? Math.min(500, Math.max(0, Math.round(connectionMin) || 0)) : null,
+            connectionMax: bulk ? Math.min(500, Math.max(0, Math.round(connectionMax) || 0)) : null,
+          });
+        }}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-violet-300/80">{folderName}</p>
+            <h2 className="mt-1 text-lg font-semibold text-zinc-50">{bulk ? "Bulk prop accounts" : "New prop account"}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-zinc-400 hover:text-zinc-100">
+            Close
+          </button>
+        </div>
+        {busy ? (
+          <CreateSequence progress={progress} />
+        ) : (
+          <>
+        <p className="mt-2 text-sm text-zinc-400">
+          {bulk
+            ? `Creates accounts with random names and adds them to ${folderName === "Main directory" ? "the main directory" : folderName}.`
+            : `Adds one account to ${folderName === "Main directory" ? "the main directory" : folderName}. Leave the name blank to generate one.`}
+        </p>
+        {bulk ? (
+          <label className="mt-5 block text-xs text-zinc-400">
+            How many
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={count}
+              disabled={busy}
+              onChange={(event) => setCount(Number(event.target.value))}
+              className={`${fieldCls} mt-1`}
+            />
+          </label>
+        ) : (
+          <>
+            <label className="mt-5 block text-xs text-zinc-400">
+              Name
+              <input
+                autoFocus
+                value={fullName}
+                disabled={busy}
+                onChange={(event) => setFullName(event.target.value)}
+                placeholder="Random name if empty"
+                className={`${fieldCls} mt-1`}
+              />
+            </label>
+            <label className="mt-3 block text-xs text-zinc-400">
+              Username
+              <input
+                value={username}
+                disabled={busy}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="Leave empty to auto-generate"
+                className={`${fieldCls} mt-1`}
+              />
+            </label>
+          </>
+        )}
+        <div className="mt-4">
+          <p className="text-xs text-zinc-400">Bio</p>
+          <div className="mt-1 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => chooseBio(false)}
+              className={`rounded-xl border px-3 py-2 text-sm font-medium ${
+                includeBio ? "border-zinc-700 text-zinc-300 hover:border-zinc-500" : "border-violet-300 bg-violet-400/15 text-violet-100"
+              }`}
+            >
+              No bio
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => chooseBio(true)}
+              className={`rounded-xl border px-3 py-2 text-sm font-medium ${
+                includeBio ? "border-violet-300 bg-violet-400/15 text-violet-100" : "border-zinc-700 text-zinc-300 hover:border-zinc-500"
+              }`}
+            >
+              Have bio
+            </button>
+          </div>
+        </div>
+        {!bulk && includeBio ? (
+          <label className="mt-3 block text-xs text-zinc-400">
+            Bio text
+            <textarea
+              value={bio}
+              disabled={busy}
+              onChange={(event) => setBio(event.target.value)}
+              className={`${fieldCls} mt-1 min-h-24 resize-y`}
+            />
+          </label>
+        ) : null}
+        {bulk && includeBio ? (
+          <p className="mt-2 text-xs text-zinc-500">Each account gets its own bio.</p>
+        ) : null}
+        {bulk ? (
+          <div className="mt-4">
+            <p className="text-xs text-zinc-400">Fake connections</p>
+            <p className="mt-1 text-xs text-zinc-500">Each account gets a random count in this range.</p>
+            <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+              <label className="text-xs text-zinc-400">
+                Min
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={connectionMin}
+                  disabled={busy}
+                  onChange={(event) => setConnectionMin(Number(event.target.value))}
+                  className={`${fieldCls} mt-1`}
+                />
+              </label>
+              <span className="pt-4 text-xs text-zinc-500">to</span>
+              <label className="text-xs text-zinc-400">
+                Max
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={connectionMax}
+                  disabled={busy}
+                  onChange={(event) => setConnectionMax(Number(event.target.value))}
+                  className={`${fieldCls} mt-1`}
+                />
+              </label>
+            </div>
+          </div>
+        ) : null}
+          </>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={busy} className="rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 disabled:opacity-50">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || (bulk && (!Number.isFinite(count) || count < 1))}
+            className={`rounded-xl bg-violet-400 px-3 py-2 text-sm font-medium text-zinc-950 ${
+              busy ? "animate-pulse shadow-[0_0_18px_rgba(167,139,250,0.55)] disabled:opacity-100" : "disabled:opacity-50"
+            }`}
+          >
+            {busy ? "Transmitting" : bulk ? "Create accounts" : "Create account"}
           </button>
         </div>
       </form>

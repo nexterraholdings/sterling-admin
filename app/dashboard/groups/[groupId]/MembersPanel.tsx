@@ -490,7 +490,7 @@ export function MembersPanel({
   function destinationSelect() {
     if (folders.length === 0) return null;
     return (
-      <label className="flex min-w-[10rem] flex-1 flex-col gap-1 text-[11px] font-medium text-zinc-400">
+      <label className="flex min-w-0 w-full flex-1 flex-col gap-1 text-[11px] font-medium text-zinc-400 sm:min-w-[10rem] sm:w-auto">
         Folder
         <select
           value={destinationFolderId}
@@ -764,7 +764,7 @@ export function MembersPanel({
               onChange={(e) => setFolderName(e.target.value)}
               maxLength={40}
               placeholder="Folder name"
-              className={`${fieldCls} min-w-[12rem] flex-1`}
+              className={`${fieldCls} min-w-0 w-full flex-1 sm:min-w-[12rem] sm:w-auto`}
             />
             <Button
               size="sm"

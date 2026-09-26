@@ -192,19 +192,19 @@ function DefinitionForm({
       />
       <p className="text-xs text-zinc-600">Uses global in-app / push toggles only (no per-type preference in v1).</p>
       {error && <p className="text-sm text-rose-300">{error}</p>}
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <button
           type="button"
           disabled={saving || !displayName.trim() || !titleTemplate.trim()}
           onClick={handleSave}
-          className="rounded-full bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-50"
+          className="min-h-11 rounded-full bg-white px-4 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-50 sm:min-h-0 sm:py-2"
         >
           {saving ? "Saving…" : "Save"}
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200"
+          className="min-h-11 rounded-full border border-zinc-700 px-4 text-sm text-zinc-400 hover:text-zinc-200 sm:min-h-0 sm:py-2"
         >
           Cancel
         </button>
@@ -250,7 +250,7 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
   }
 
   return (
-    <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-sm">
+    <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-4 shadow-sm sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-zinc-50">Custom notification types</h3>
@@ -305,7 +305,7 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
             {definitions.map((def) => (
               <div
                 key={def.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-800 px-4 py-3"
+                className="flex flex-col gap-3 rounded-2xl border border-zinc-800 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
                   <p className="font-medium text-zinc-50">{def.display_name}</p>
@@ -313,11 +313,11 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
                   <p className="truncate text-xs text-zinc-500">{def.title_template}</p>
                   <p className="text-[11px] text-zinc-600">{TAP_DESTINATION_LABELS[def.tap_destination]}</p>
                 </div>
-                <div className="flex shrink-0 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:shrink-0">
                   <button
                     type="button"
                     onClick={() => toggleEnabled(def)}
-                    className="rounded-full border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800"
+                    className="min-h-11 rounded-full border border-zinc-800 px-3 text-sm text-zinc-400 hover:bg-zinc-800 sm:min-h-0 sm:py-1.5 sm:text-xs"
                   >
                     {def.enabled ? "Disable" : "Enable"}
                   </button>
@@ -328,7 +328,7 @@ export function CustomNotificationTypesPanel({ onDefinitionsChange }: { onDefini
                       setEditTarget(def);
                       setFormMode("edit");
                     }}
-                    className="rounded-full border border-zinc-800 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                    className="min-h-11 rounded-full border border-zinc-800 px-3 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50 sm:min-h-0 sm:py-1.5 sm:text-xs"
                   >
                     Edit
                   </button>

@@ -95,7 +95,7 @@ function toWatch(row: WatchRow, hubs: Map<string, KnowledgeHubOption>): Knowledg
     searchTerms: String(row.search_terms ?? ""),
     xHandles: parseHandles(row.x_handles ?? []),
     teams: parseTeams(row.teams ?? []),
-    everyMinutes: Number(row.every_minutes ?? 180),
+    everyMinutes: Number(row.every_minutes ?? 360),
     approval: approvalOf(row.approval),
     enabled: Boolean(row.enabled),
     lastPulledAt: row.last_pulled_at,
@@ -214,7 +214,7 @@ export async function loadKnowledgeDashboard(): Promise<KnowledgeDashboard> {
 function watchPatch(input: KnowledgeWatchInput) {
   const label = input.label.trim().slice(0, 80);
   const searchTerms = input.searchTerms.trim().slice(0, 400);
-  const everyMinutes = Math.min(1440, Math.max(30, Math.trunc(Number(input.everyMinutes) || 180)));
+  const everyMinutes = Math.min(1440, Math.max(30, Math.trunc(Number(input.everyMinutes) || 360)));
   return {
     hub_id: input.hubId,
     label,
@@ -276,12 +276,12 @@ export async function loadDueWatches(limit: number): Promise<WatchRow[]> {
     .select(WATCH_SELECT)
     .eq("enabled", true)
     .order("last_pulled_at", { ascending: true, nullsFirst: true })
-    .limit(100);
+    .limit(500);
   if (error && isMissingSchemaError(error)) return [];
   if (error) throw new Error(error.message);
   const now = Date.now();
   return ((data ?? []) as WatchRow[])
-    .filter((row) => !row.last_pulled_at || now - new Date(row.last_pulled_at).getTime() >= Number(row.every_minutes ?? 180) * 60_000)
+    .filter((row) => !row.last_pulled_at || now - new Date(row.last_pulled_at).getTime() >= Number(row.every_minutes ?? 360) * 60_000)
     .slice(0, limit);
 }
 
@@ -293,31 +293,64 @@ export async function loadWatchedHubIds(): Promise<Set<string>> {
   return new Set(((data ?? []) as Array<{ hub_id: string }>).map((row) => String(row.hub_id)));
 }
 
-/** A fresh approved fact for this hub that this group has not posted about yet. */
+const DAY_MS = 24 * 60 * 60_000;
+/** A group opens with the weather at most once in this window. */
+const WEATHER_GAP_MS = 20 * 60 * 60_000;
+
+/**
+ * A fresh approved fact for this hub that this group has not posted about yet. Sources rotate:
+ * the group's least-used source over the last day goes first, and weather at most once a day.
+ */
 export async function pickFactForGroup(hubId: string, groupId: string): Promise<KnowledgeFact | null> {
-  const nowIso = new Date().toISOString();
+  const now = Date.now();
   const { data, error } = await supabaseAdmin
     .from("knowledge_items")
-    .select("id, claim, author, source_url, used_count, fetched_at")
+    .select("id, claim, author, source, source_url, used_count, fetched_at")
     .eq("hub_id", hubId)
     .eq("status", "approved")
-    .gt("expires_at", nowIso)
+    .gt("expires_at", new Date(now).toISOString())
     .order("used_count", { ascending: true })
     .order("fetched_at", { ascending: false })
-    .limit(30);
+    .limit(60);
   if (error && isMissingSchemaError(error)) return null;
   if (error) throw new Error(error.message);
-  const rows = (data ?? []) as Array<{ id: string; claim: string; author: string | null; source_url: string }>;
+  const rows = (data ?? []) as Array<{ id: string; claim: string; author: string | null; source: string; source_url: string }>;
   if (rows.length === 0) return null;
 
-  const { data: usedRows, error: usedError } = await supabaseAdmin
-    .from("prop_engagement_jobs")
-    .select("knowledge_item_id")
-    .eq("group_id", groupId)
-    .in("knowledge_item_id", rows.map((row) => row.id));
-  if (usedError && !isMissingSchemaError(usedError)) throw new Error(usedError.message);
+  const [{ data: usedRows, error: usedError }, { data: recentRows, error: recentError }] = await Promise.all([
+    supabaseAdmin
+      .from("prop_engagement_jobs")
+      .select("knowledge_item_id")
+      .eq("group_id", groupId)
+      .in("knowledge_item_id", rows.map((row) => row.id)),
+    supabaseAdmin
+      .from("prop_engagement_jobs")
+      .select("run_at, knowledge_items(source)")
+      .eq("group_id", groupId)
+      .not("knowledge_item_id", "is", null)
+      .gte("run_at", new Date(now - DAY_MS).toISOString())
+      .lte("run_at", new Date(now).toISOString())
+      .limit(100),
+  ]);
+  for (const result of [usedError, recentError]) if (result && !isMissingSchemaError(result)) throw new Error(result.message);
   const used = new Set(((usedRows ?? []) as Array<{ knowledge_item_id: string | null }>).map((row) => String(row.knowledge_item_id ?? "")));
-  const pick = rows.find((row) => !used.has(String(row.id)));
+
+  const recentBySource = new Map<string, number>();
+  let weatherLocked = false;
+  type RecentRow = { run_at: string; knowledge_items: { source?: string } | Array<{ source?: string }> | null };
+  for (const row of (recentRows ?? []) as unknown as RecentRow[]) {
+    const joined = Array.isArray(row.knowledge_items) ? row.knowledge_items[0] : row.knowledge_items;
+    const source = joined?.source ?? "";
+    if (!source) continue;
+    recentBySource.set(source, (recentBySource.get(source) ?? 0) + 1);
+    if (source === "weather" && now - new Date(row.run_at).getTime() < WEATHER_GAP_MS) weatherLocked = true;
+  }
+
+  const candidates = rows
+    .map((row, rank) => ({ row, rank }))
+    .filter(({ row }) => !used.has(String(row.id)) && !(weatherLocked && row.source === "weather"));
+  candidates.sort((a, b) => (recentBySource.get(a.row.source) ?? 0) - (recentBySource.get(b.row.source) ?? 0) || a.rank - b.rank);
+  const pick = candidates[0]?.row;
   return pick ? { id: String(pick.id), claim: pick.claim, author: String(pick.author ?? ""), sourceUrl: pick.source_url } : null;
 }
 

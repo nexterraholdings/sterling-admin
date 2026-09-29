@@ -73,7 +73,7 @@ function emptyWatch(hubs: KnowledgeHubOption[]): KnowledgeWatchInput {
     searchTerms: "",
     xHandles: [],
     teams: [],
-    everyMinutes: 180,
+    everyMinutes: 360,
     approval: "review",
     enabled: true,
   };

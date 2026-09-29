@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
-    const result = await runKnowledgePull(2);
+    const result = await runKnowledgePull(6);
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Knowledge pull failed";

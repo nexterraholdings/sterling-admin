@@ -13,7 +13,7 @@ create table if not exists public.knowledge_watches (
   x_handles text[] not null default '{}',
   -- Team names looked up on TheSportsDB, e.g. {New York Knicks, Brooklyn Nets}.
   teams text[] not null default '{}',
-  every_minutes integer not null default 180 check (every_minutes >= 30 and every_minutes <= 1440),
+  every_minutes integer not null default 360 check (every_minutes >= 30 and every_minutes <= 1440),
   -- review: the checks suggest, an admin decides. auto: the checks decide.
   approval text not null default 'review' check (approval in ('review', 'auto')),
   enabled boolean not null default true,
@@ -52,7 +52,8 @@ create table if not exists public.knowledge_items (
 
 alter table public.knowledge_watches
   add column if not exists feeds text[] not null default '{news,weather}',
-  add column if not exists teams text[] not null default '{}';
+  add column if not exists teams text[] not null default '{}',
+  alter column every_minutes set default 360;
 
 alter table public.knowledge_items drop constraint if exists knowledge_items_source_check;
 alter table public.knowledge_items
@@ -90,10 +91,10 @@ alter table public.knowledge_watches enable row level security;
 alter table public.knowledge_items enable row level security;
 alter table public.knowledge_pulls enable row level security;
 
--- Every 15 minutes, with the same bearer token as prop-conversations-tick.
+-- Every 10 minutes, up to 6 due watches per run, with the same bearer token as prop-conversations-tick.
 select cron.schedule(
   'knowledge-pull',
-  '*/15 * * * *',
+  '*/10 * * * *',
   $$
   select net.http_post(
     url := 'https://admin.sterlingtheapp.com/api/cron/knowledge-pull',

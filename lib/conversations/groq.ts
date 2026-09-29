@@ -128,6 +128,38 @@ function typoWord(word: string): string {
   return `${lead}${chars.join("")}${tail}`;
 }
 
+const COMMON_CAPITALS = new Set(
+  "i i'm i've i'd i'll im ive id ill ok okay omg lol lmao tbh idk fyi asap ngl smh btw pm am tv usa us uk".split(" "),
+);
+
+function numberKey(token: string): string {
+  return token.replace(/[,]/g, "").replace(/[.:]+$/, "");
+}
+
+/**
+ * Numbers and mid-sentence capitalized names in an English `line` that `grounded` never mentions.
+ * Lines in other languages are not checked: the fact is stored in English, so names and dates will not match word for word.
+ */
+export function unsupportedDetails(line: string, grounded: string): string[] {
+  const source = grounded.toLowerCase();
+  const sourceNumbers = new Set((grounded.match(/\d[\d,.:]*/g) ?? []).map(numberKey));
+  const extra = new Set<string>();
+  for (const token of line.match(/\d[\d,.:]*/g) ?? []) {
+    const key = numberKey(token);
+    if (key && !sourceNumbers.has(key)) extra.add(key);
+  }
+  for (const match of line.matchAll(/\b[A-Z][\p{L}'’]+(?:\s+[A-Z][\p{L}'’]+)*/gu)) {
+    const before = line.slice(0, match.index).trimEnd();
+    if (!before || /[.!?]$/.test(before)) continue;
+    for (const word of match[0].split(/\s+/)) {
+      const bare = word.replace(/['’]s$/i, "").toLowerCase();
+      if (!bare || COMMON_CAPITALS.has(bare) || source.includes(bare)) continue;
+      extra.add(word);
+    }
+  }
+  return [...extra].slice(0, 4);
+}
+
 export type GroqLine = {
   text: string;
   model: string;
@@ -164,19 +196,28 @@ export async function writeConversationLine(input: {
   swearRate?: SwearRate;
   grammar?: number;
   abbrev?: number;
+  place?: string;
+  language?: string;
+  /** From the knowledge hub. An opening post is written about this and nothing else; a reply may not add to it. */
+  fact?: { claim: string; author: string } | null;
 }): Promise<GroqLine> {
   const key = process.env.GROQ_API_KEY?.trim();
   if (!key) throw new GroqCallError("GROQ_API_KEY is not configured");
 
+  const fact = input.fact?.claim.trim() ? { claim: input.fact.claim.trim(), author: input.fact.author.trim() } : null;
+  const opensFromFact = Boolean(fact) && input.kind === "start_post";
   const rules = (input.rules ?? []).map((rule) => rule.trim()).filter(Boolean);
   const behavior = input.behavior?.trim() ?? "";
   const character = input.character?.trim() ?? "";
-  const subject = input.subject?.trim() ?? "";
+  const subject = opensFromFact ? "" : input.subject?.trim() ?? "";
   const objective = input.objective?.trim() ?? "";
   const grammar = parseGrammar(input.grammar);
   const abbrev = parseAbbrev(input.abbrev);
   const allowSwearing = Boolean(input.swear);
   const thread = (input.thread ?? []).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 8);
+  const place = input.place?.trim() ?? "";
+  const language = input.language?.trim() ?? "";
+  const foreign = Boolean(language) && language.toLowerCase() !== "english";
   const task =
     input.kind === "reply"
       ? [
@@ -186,82 +227,118 @@ export async function writeConversationLine(input: {
         ]
           .filter(Boolean)
           .join("\n\n")
-      : "Open a new post in the group. Do not mention that you were asked to post.";
+      : opensFromFact
+        ? "Open a new post in the group about the fact above. Do not mention that you were asked to post, and do not include a link."
+        : "Open a new post in the group. Do not mention that you were asked to post.";
+  const factLines = !fact
+    ? []
+    : opensFromFact
+      ? [
+          `Something real that happened in ${place || "this place"} today: ${fact.claim}${fact.author ? ` (from ${fact.author})` : ""}`,
+          "Write about this fact only. Mention only names, places, numbers, dates, and events that appear in it. Do not add prices, times, reasons, or details it does not give. React to it the way this person would.",
+        ]
+      : [
+          `This conversation is about something real: ${fact.claim}`,
+          "React to it, ask about it, or give an opinion. Do not add new facts, names, numbers, dates, or events.",
+        ];
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      temperature: 0.9,
-      max_tokens: 700,
-      reasoning_effort: "low",
-      include_reasoning: false,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You write one short message for a local group chat, like a text from a real neighbor.",
-            ...(objective ? [`Run objective: ${objective} Serve that goal while still sounding like one neighbor texting.`] : []),
-            `Personality: ${personalityOrDefault(input.personality)}`,
-            ...(character
-              ? [
-                  `Who this person is: ${character}`,
-                  "These traits decide what they care about and how they phrase it. The grammar level and the abbreviation level still control typos and shortened words.",
-                ]
-              : []),
-            `Topic: ${topicOrDefault(input.topic)}`,
-            ...(subject ? [`What they bring up, in their own words: ${subject}`] : []),
-            ...styleNotes(grammar),
-            swearInstruction(allowSwearing, input.swearRate ?? "sometimes"),
-            ...(rules.length > 0
-              ? [
-                  behavior
-                    ? "Follow every rule below. A rule wins when it conflicts with the style notes above, except the grammar level, the abbreviation level, and this person's own behavior."
-                    : "Follow every rule below. A rule wins when it conflicts with the style notes above, except the grammar level and the abbreviation level.",
-                  ...rules.map((rule) => `- ${rule}`),
-                ]
-              : []),
-            `Grammar level: ${grammarInstruction(grammar)} This grammar level wins over any rule about spelling, typos, or polish.`,
-            `Abbreviation level: ${abbrevInstruction(abbrev, allowSwearing)} This abbreviation level wins over any rule about spelling those phrases out.`,
-            ...(forbidsHyphens(rules)
-              ? ["Never use a hyphen or a dash anywhere in this line, including compound words. Use a space or a period. This wins over the grammar level."]
-              : []),
-            ...(behavior
-              ? [
-                  "This person's own behavior controls how they write. Follow it on this line. It wins over the run rules when they conflict.",
-                  behavior,
-                ]
-              : []),
-          ].join("\n"),
-        },
-        { role: "user", content: task },
-      ],
-    }),
-    signal: AbortSignal.timeout(20_000),
-  });
-
-  const payload = (await response.json().catch(() => null)) as {
-    error?: { message?: string };
-    model?: string;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-    choices?: Array<{ message?: { content?: unknown } }>;
-  } | null;
-
-  const usage = {
-    promptTokens: Number(payload?.usage?.prompt_tokens ?? 0),
-    completionTokens: Number(payload?.usage?.completion_tokens ?? 0),
-    model: payload?.model || GROQ_MODEL,
+  const system = {
+    role: "system",
+    content: [
+      place
+        ? `You write one short message for a local group chat in ${place}, like a text from a real neighbor who lives there.`
+        : "You write one short message for a local group chat, like a text from a real neighbor.",
+      ...(foreign
+        ? [`Write the message in ${language}, the way people there actually text. The grammar and abbreviation levels apply in ${language}.`]
+        : []),
+      ...(objective ? [`Run objective: ${objective} Serve that goal while still sounding like one neighbor texting.`] : []),
+      `Personality: ${personalityOrDefault(input.personality)}`,
+      ...(character
+        ? [
+            `Who this person is: ${character}`,
+            "These traits decide what they care about and how they phrase it. The grammar level and the abbreviation level still control typos and shortened words.",
+          ]
+        : []),
+      `Topic: ${topicOrDefault(input.topic)}`,
+      ...factLines,
+      ...(subject ? [`What they bring up, in their own words: ${subject}`] : []),
+      ...styleNotes(grammar),
+      swearInstruction(allowSwearing, input.swearRate ?? "sometimes"),
+      ...(rules.length > 0
+        ? [
+            behavior
+              ? "Follow every rule below. A rule wins when it conflicts with the style notes above, except the grammar level, the abbreviation level, and this person's own behavior."
+              : "Follow every rule below. A rule wins when it conflicts with the style notes above, except the grammar level and the abbreviation level.",
+            ...rules.map((rule) => `- ${rule}`),
+          ]
+        : []),
+      `Grammar level: ${grammarInstruction(grammar)} This grammar level wins over any rule about spelling, typos, or polish.`,
+      `Abbreviation level: ${abbrevInstruction(abbrev, allowSwearing)} This abbreviation level wins over any rule about spelling those phrases out.`,
+      ...(forbidsHyphens(rules)
+        ? ["Never use a hyphen or a dash anywhere in this line, including compound words. Use a space or a period. This wins over the grammar level."]
+        : []),
+      ...(behavior
+        ? [
+            "This person's own behavior controls how they write. Follow it on this line. It wins over the run rules when they conflict.",
+            behavior,
+          ]
+        : []),
+    ].join("\n"),
   };
 
-  if (!response.ok) {
-    throw new GroqCallError(payload?.error?.message || `Groq returned ${response.status}`, usage);
+  const usage = { promptTokens: 0, completionTokens: 0, model: GROQ_MODEL };
+  const messages: Array<{ role: string; content: string }> = [system, { role: "user", content: task }];
+  const grounded = fact ? [fact.claim, fact.author, place, input.parentBody ?? "", ...thread].join(" ") : "";
+  let clean = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        temperature: opensFromFact ? 0.4 : 0.9,
+        max_tokens: 700,
+        reasoning_effort: "low",
+        include_reasoning: false,
+        messages,
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    const payload = (await response.json().catch(() => null)) as {
+      error?: { message?: string };
+      model?: string;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      choices?: Array<{ message?: { content?: unknown } }>;
+    } | null;
+    usage.promptTokens += Number(payload?.usage?.prompt_tokens ?? 0);
+    usage.completionTokens += Number(payload?.usage?.completion_tokens ?? 0);
+    usage.model = payload?.model || usage.model;
+
+    if (!response.ok) {
+      throw new GroqCallError(payload?.error?.message || `Groq returned ${response.status}`, usage);
+    }
+
+    clean = cleanLine(messageText(payload?.choices?.[0]?.message?.content));
+    if (!fact || foreign) break;
+    const extra = unsupportedDetails(clean, grounded);
+    if (extra.length === 0) break;
+    if (attempt === 1) {
+      throw new GroqCallError(`Line added details that are not in the fact: ${extra.join(", ")}`, usage);
+    }
+    messages.push(
+      { role: "assistant", content: clean },
+      {
+        role: "user",
+        content: `That added ${extra.join(", ")}, which the fact does not say. Write it again using only what the fact says.`,
+      },
+    );
   }
 
-  const drafted = roughenLine(cleanLine(messageText(payload?.choices?.[0]?.message?.content)), grammar);
+  const drafted = roughenLine(clean, grammar);
   const text = forbidsHyphens(rules) ? stripHyphens(drafted) : drafted;
   if (text.length < 2) throw new GroqCallError("Groq returned an empty line", usage);
   const prior = new Set(

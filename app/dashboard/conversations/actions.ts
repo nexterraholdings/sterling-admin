@@ -29,7 +29,7 @@ import {
   skipConversationJob,
 } from "@/lib/conversations/db";
 import { addPostsForToday, fillWeekForGroup, runConversationTick } from "@/lib/conversations/tick";
-import { saveRegionObjective, setAccountExcluded, setRunPaused } from "@/lib/conversations/region-runs";
+import { saveRegionLocale, saveRegionObjective, setAccountExcluded, setRunPaused } from "@/lib/conversations/region-runs";
 import { parseWeekDays } from "@/lib/conversations/week";
 import type { SwearRate } from "@/lib/conversations/rules";
 import type { PropVoice } from "@/lib/prop-voice";
@@ -143,6 +143,15 @@ export async function addRegionPostsToday(groupIds: string[]): Promise<Conversat
 export async function saveRegionObjectiveAction(hubId: string, objective: string): Promise<ConversationDashboard> {
   await requireAdmin(OPERATOR_ROLES);
   await saveRegionObjective(hubId, objective);
+  return loadConversationDashboard();
+}
+
+export async function saveRegionLocaleAction(
+  hubId: string,
+  input: { timeZone: string; language: string },
+): Promise<ConversationDashboard> {
+  await requireAdmin(OPERATOR_ROLES);
+  await saveRegionLocale(hubId, input);
   return loadConversationDashboard();
 }
 

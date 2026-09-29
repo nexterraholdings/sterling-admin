@@ -20,7 +20,8 @@ import {
   parseWeekHour,
   postsInWindow,
 } from "@/lib/conversations/week";
-import { startOfNyDay } from "@/lib/conversations/time";
+import { DEFAULT_ZONE, startOfNyDay } from "@/lib/conversations/time";
+import { loadGroupLocales, loadHubLocales, type HubLocale } from "@/lib/conversations/hub-locale";
 import type {
   ConversationActiveRun,
   ConversationDashboard,
@@ -400,7 +401,12 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
   }));
 
   const moments = await loadRunMomentsSince(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
-  const [objectives, excludedByHub, pausedByHub] = await Promise.all([loadRegionObjectives(), loadExcludedByHub(), loadRunPause()]);
+  const [objectives, excludedByHub, pausedByHub, hubLocales] = await Promise.all([
+    loadRegionObjectives(),
+    loadExcludedByHub(),
+    loadRunPause(),
+    loadHubLocales(groups.map((group) => group.hubId)),
+  ]);
   const activeRuns = buildActiveRuns(
     openJobResult.data ?? [],
     [...(todayJobResult.data ?? []), ...(finishedJobResult.data ?? [])],
@@ -409,7 +415,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
     moments,
     personaResult,
   );
-  const regionRuns = buildRegionRuns(groups, activeRuns, objectives, excludedByHub, pausedByHub, personaResult);
+  const regionRuns = buildRegionRuns(groups, activeRuns, objectives, excludedByHub, pausedByHub, personaResult, hubLocales);
 
   return {
     settings,
@@ -630,6 +636,7 @@ function buildRegionRuns(
   excludedByHub: Map<string, Set<string>>,
   pausedByHub: Map<string, boolean>,
   voices: Map<string, PropVoice>,
+  hubLocales: Map<string, HubLocale>,
 ): RegionRun[] {
   const runByGroup = new Map(runs.map((run) => [run.groupId, run]));
   const byHub = new Map<string, ConversationGroup[]>();
@@ -666,10 +673,15 @@ function buildRegionRuns(
       }
     }
     const snapshot = mergeSnapshots(includedRuns, lead);
+    const locale = hubLocales.get(hubId);
     regions.push({
       hubId,
       title: hubId ? lead.hubTitle?.trim() || "Region" : "No region",
       objective: objectives.get(hubId) ?? "",
+      timeZone: locale?.timeZone ?? DEFAULT_ZONE,
+      language: locale?.language ?? "English",
+      place: locale?.place ?? "",
+      localeSource: locale?.source ?? "default",
       paused: Boolean(pausedByHub.get(hubId)),
       interacting: includedRuns.some((run) => run.interacting),
       groups: hubGroups
@@ -1075,9 +1087,10 @@ export async function previewGroupLine(groupId: string, userId: string): Promise
   const members = await loadPropMemberIdsByGroup();
   if (!(members.get(groupId) ?? []).includes(userId)) throw new Error("That account is not in this group.");
 
-  const [{ data: config, error: configError }, voice] = await Promise.all([
+  const [{ data: config, error: configError }, voice, locales] = await Promise.all([
     supabaseAdmin.from("prop_conversation_groups").select("topic, rules, swear, swear_rate, grammar, abbrev").eq("group_id", groupId).maybeSingle(),
     loadAccountVoice(userId),
+    loadGroupLocales([groupId]),
   ]);
   if (configError) throw new Error(configError.message);
   const speaking = lineVoice(voice, {
@@ -1100,6 +1113,7 @@ export async function previewGroupLine(groupId: string, userId: string): Promise
       swearRate: speaking.swearRate,
       grammar: speaking.grammar,
       abbrev: speaking.abbrev,
+      language: locales.get(groupId)?.language,
     });
     await logGroqCall({
       model: line.model,

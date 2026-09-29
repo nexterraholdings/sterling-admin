@@ -18,6 +18,7 @@ const PATH_ROLES: Array<{ prefix: string; roles: readonly AdminRole[] }> = [
   { prefix: "/dashboard/prop-accounts", roles: OPERATOR_ROLES },
   { prefix: "/dashboard/groups", roles: OPERATOR_ROLES },
   { prefix: "/dashboard/conversations", roles: OPERATOR_ROLES },
+  { prefix: "/dashboard/knowledge", roles: OPERATOR_ROLES },
   { prefix: "/dashboard/notifications", roles: MARKETING_ROLES },
   { prefix: "/dashboard/blog", roles: MARKETING_ROLES },
   { prefix: "/dashboard", roles: ADMIN_ROLES },

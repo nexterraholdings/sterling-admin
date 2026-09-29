@@ -1,5 +1,6 @@
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { isTimeZone } from "@/lib/conversations/time";
 
 const SCHEMA_HINT = "Run supabase/sql/prop_region_runs.sql in the Supabase SQL editor, then try again.";
 
@@ -72,6 +73,24 @@ export async function saveRegionObjective(hubId: string, objective: string): Pro
     {
       hub_id: hubId,
       objective: objective.trim().slice(0, 400),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "hub_id" },
+  );
+  if (error && isMissingSchemaError(error)) throw new Error(SCHEMA_HINT);
+  if (error) throw new Error(error.message);
+}
+
+export async function saveRegionLocale(hubId: string, input: { timeZone: string; language: string }): Promise<void> {
+  if (!hubId) throw new Error("This run has no region yet.");
+  const timeZone = input.timeZone.trim();
+  const language = input.language.trim().slice(0, 40);
+  if (timeZone && !isTimeZone(timeZone)) throw new Error(`${timeZone} is not a time zone. Use a name like Asia/Tokyo.`);
+  const { error } = await supabaseAdmin.from("prop_region_runs").upsert(
+    {
+      hub_id: hubId,
+      timezone: timeZone || null,
+      language: language || null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "hub_id" },

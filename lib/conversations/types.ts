@@ -174,6 +174,12 @@ export type RegionRun = {
   hubId: string;
   title: string;
   objective: string;
+  /** Week hours and daily caps count in this zone. */
+  timeZone: string;
+  language: string;
+  place: string;
+  /** "region" when set on this run, otherwise taken from the nearest listed city. */
+  localeSource: "region" | "nearest" | "default";
   paused: boolean;
   interacting: boolean;
   groups: RegionRunGroup[];

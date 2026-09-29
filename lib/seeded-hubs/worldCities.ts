@@ -130,6 +130,138 @@ export const WORLD_CITIES: WorldCity[] = [
   { title: "auckland", locationHint: "Auckland, New Zealand", region: "Oceania", lat: -36.8485, lng: 174.7633 },
 ];
 
+export type CityLocale = { timeZone: string; language: string };
+
+const EN_US = (timeZone: string): CityLocale => ({ timeZone, language: "English" });
+
+/** Local time and the language people post in, keyed by `WorldCity.title`. */
+export const WORLD_CITY_LOCALES: Record<string, CityLocale> = {
+  newyorkcity: EN_US("America/New_York"),
+  losangeles: EN_US("America/Los_Angeles"),
+  chicago: EN_US("America/Chicago"),
+  houston: EN_US("America/Chicago"),
+  miami: EN_US("America/New_York"),
+  sanfrancisco: EN_US("America/Los_Angeles"),
+  seattle: EN_US("America/Los_Angeles"),
+  boston: EN_US("America/New_York"),
+  atlanta: EN_US("America/New_York"),
+  dallas: EN_US("America/Chicago"),
+  austin: EN_US("America/Chicago"),
+  denver: EN_US("America/Denver"),
+  phoenix: EN_US("America/Phoenix"),
+  lasvegas: EN_US("America/Los_Angeles"),
+  washingtondc: EN_US("America/New_York"),
+  philadelphia: EN_US("America/New_York"),
+  sandiego: EN_US("America/Los_Angeles"),
+  neworleans: EN_US("America/Chicago"),
+  nashville: EN_US("America/Chicago"),
+  portland: EN_US("America/Los_Angeles"),
+  toronto: EN_US("America/Toronto"),
+  vancouver: EN_US("America/Vancouver"),
+  montreal: { timeZone: "America/Toronto", language: "French" },
+  mexicocity: { timeZone: "America/Mexico_City", language: "Spanish" },
+  cancun: { timeZone: "America/Cancun", language: "Spanish" },
+
+  saopaulo: { timeZone: "America/Sao_Paulo", language: "Portuguese" },
+  riodejaneiro: { timeZone: "America/Sao_Paulo", language: "Portuguese" },
+  buenosaires: { timeZone: "America/Argentina/Buenos_Aires", language: "Spanish" },
+  santiago: { timeZone: "America/Santiago", language: "Spanish" },
+  lima: { timeZone: "America/Lima", language: "Spanish" },
+  bogota: { timeZone: "America/Bogota", language: "Spanish" },
+  medellin: { timeZone: "America/Bogota", language: "Spanish" },
+  quito: { timeZone: "America/Guayaquil", language: "Spanish" },
+  montevideo: { timeZone: "America/Montevideo", language: "Spanish" },
+
+  london: { timeZone: "Europe/London", language: "English" },
+  paris: { timeZone: "Europe/Paris", language: "French" },
+  berlin: { timeZone: "Europe/Berlin", language: "German" },
+  madrid: { timeZone: "Europe/Madrid", language: "Spanish" },
+  barcelona: { timeZone: "Europe/Madrid", language: "Spanish" },
+  rome: { timeZone: "Europe/Rome", language: "Italian" },
+  milan: { timeZone: "Europe/Rome", language: "Italian" },
+  amsterdam: { timeZone: "Europe/Amsterdam", language: "Dutch" },
+  lisbon: { timeZone: "Europe/Lisbon", language: "Portuguese" },
+  dublin: { timeZone: "Europe/Dublin", language: "English" },
+  vienna: { timeZone: "Europe/Vienna", language: "German" },
+  zurich: { timeZone: "Europe/Zurich", language: "German" },
+  brussels: { timeZone: "Europe/Brussels", language: "French" },
+  copenhagen: { timeZone: "Europe/Copenhagen", language: "Danish" },
+  stockholm: { timeZone: "Europe/Stockholm", language: "Swedish" },
+  oslo: { timeZone: "Europe/Oslo", language: "Norwegian" },
+  helsinki: { timeZone: "Europe/Helsinki", language: "Finnish" },
+  warsaw: { timeZone: "Europe/Warsaw", language: "Polish" },
+  prague: { timeZone: "Europe/Prague", language: "Czech" },
+  budapest: { timeZone: "Europe/Budapest", language: "Hungarian" },
+  athens: { timeZone: "Europe/Athens", language: "Greek" },
+  istanbul: { timeZone: "Europe/Istanbul", language: "Turkish" },
+  moscow: { timeZone: "Europe/Moscow", language: "Russian" },
+  kyiv: { timeZone: "Europe/Kyiv", language: "Ukrainian" },
+
+  dubai: { timeZone: "Asia/Dubai", language: "English" },
+  abudhabi: { timeZone: "Asia/Dubai", language: "English" },
+  doha: { timeZone: "Asia/Qatar", language: "Arabic" },
+  riyadh: { timeZone: "Asia/Riyadh", language: "Arabic" },
+  telaviv: { timeZone: "Asia/Jerusalem", language: "Hebrew" },
+  amman: { timeZone: "Asia/Amman", language: "Arabic" },
+
+  cairo: { timeZone: "Africa/Cairo", language: "Arabic" },
+  lagos: { timeZone: "Africa/Lagos", language: "English" },
+  nairobi: { timeZone: "Africa/Nairobi", language: "English" },
+  capetown: { timeZone: "Africa/Johannesburg", language: "English" },
+  johannesburg: { timeZone: "Africa/Johannesburg", language: "English" },
+  casablanca: { timeZone: "Africa/Casablanca", language: "French" },
+  accra: { timeZone: "Africa/Accra", language: "English" },
+  addisababa: { timeZone: "Africa/Addis_Ababa", language: "Amharic" },
+
+  tokyo: { timeZone: "Asia/Tokyo", language: "Japanese" },
+  osaka: { timeZone: "Asia/Tokyo", language: "Japanese" },
+  seoul: { timeZone: "Asia/Seoul", language: "Korean" },
+  beijing: { timeZone: "Asia/Shanghai", language: "Chinese" },
+  shanghai: { timeZone: "Asia/Shanghai", language: "Chinese" },
+  hongkong: { timeZone: "Asia/Hong_Kong", language: "Cantonese" },
+  singapore: { timeZone: "Asia/Singapore", language: "English" },
+  bangkok: { timeZone: "Asia/Bangkok", language: "Thai" },
+  kualalumpur: { timeZone: "Asia/Kuala_Lumpur", language: "Malay" },
+  jakarta: { timeZone: "Asia/Jakarta", language: "Indonesian" },
+  manila: { timeZone: "Asia/Manila", language: "English" },
+  hanoi: { timeZone: "Asia/Ho_Chi_Minh", language: "Vietnamese" },
+  hochiminhcity: { timeZone: "Asia/Ho_Chi_Minh", language: "Vietnamese" },
+  mumbai: { timeZone: "Asia/Kolkata", language: "English" },
+  delhi: { timeZone: "Asia/Kolkata", language: "English" },
+  bangalore: { timeZone: "Asia/Kolkata", language: "English" },
+  taipei: { timeZone: "Asia/Taipei", language: "Chinese" },
+  karachi: { timeZone: "Asia/Karachi", language: "Urdu" },
+  dhaka: { timeZone: "Asia/Dhaka", language: "Bengali" },
+
+  sydney: { timeZone: "Australia/Sydney", language: "English" },
+  melbourne: { timeZone: "Australia/Melbourne", language: "English" },
+  brisbane: { timeZone: "Australia/Brisbane", language: "English" },
+  perth: { timeZone: "Australia/Perth", language: "English" },
+  auckland: { timeZone: "Pacific/Auckland", language: "English" },
+};
+
+function milesBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLng = (lng2 - lng1) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Nearest listed city with a known locale. Hubs outside the list take the closest city's time and language. */
+export function nearestCityLocale(lat: number, lng: number): (CityLocale & { city: WorldCity; miles: number }) | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  let best: { city: WorldCity; miles: number } | null = null;
+  for (const city of WORLD_CITIES) {
+    if (!WORLD_CITY_LOCALES[city.title]) continue;
+    const miles = milesBetween(lat, lng, city.lat, city.lng);
+    if (!best || miles < best.miles) best = { city, miles };
+  }
+  if (!best) return null;
+  const locale = WORLD_CITY_LOCALES[best.city.title];
+  return locale ? { ...locale, ...best } : null;
+}
+
 export const WORLD_CITY_REGIONS: WorldCityRegion[] = [
   "North America",
   "South America",

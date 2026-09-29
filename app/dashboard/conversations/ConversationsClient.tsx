@@ -19,6 +19,7 @@ import {
   savePropVoice,
   saveRegionAbbrev,
   saveRegionGrammar,
+  saveRegionLocaleAction,
   saveRegionObjectiveAction,
   saveRegionRules,
   saveRegionSwear,
@@ -35,7 +36,7 @@ import {
   skipQueuedLine,
   updateSentLine,
 } from "@/app/dashboard/conversations/actions";
-import { nyDateKey, withinActiveHours } from "@/lib/conversations/time";
+import { hourIn, nyDateKey, withinActiveHours } from "@/lib/conversations/time";
 import { abbrevHint, abbrevLabel, editableRunRules, forbidsHyphens, grammarHint, grammarLabel, serializeRunRules, SWEAR_RATES, withNoHyphenRule, type SwearRate } from "@/lib/conversations/rules";
 import { describeWeek, postsInWindow } from "@/lib/conversations/week";
 import { TOPIC_DIRECTIONS } from "@/lib/conversations/types";
@@ -296,7 +297,7 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
         </form>
 
         <div className="mt-4">
-          <p className="text-sm text-zinc-400">Hours it is allowed to send</p>
+          <p className="text-sm text-zinc-400">Hours it is allowed to send, in each region&apos;s local time</p>
           <div className="mt-2 flex flex-wrap items-end gap-2">
           {HOUR_PRESETS.map((preset) => (
             <button
@@ -402,6 +403,7 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
             })
           }
           onSaveObjective={(hubId, objective) => void run(`objective:${hubId}`, () => saveRegionObjectiveAction(hubId, objective))}
+          onSaveLocale={(hubId, locale) => void run(`locale:${hubId}`, () => saveRegionLocaleAction(hubId, locale))}
           onToggleGroup={(groupId, included) => void run(`group:${groupId}`, () => setRegionGroupIncluded(groupId, included))}
           onToggleAccount={(hubId, userId, included) =>
             void run(`account:${userId}`, () => setRegionAccountIncluded(hubId, userId, included))
@@ -634,6 +636,7 @@ function ActiveRuns({
   onSaveWeek,
   onAddToday,
   onSaveObjective,
+  onSaveLocale,
   onToggleGroup,
   onToggleAccount,
   onSaveVoice,
@@ -660,6 +663,7 @@ function ActiveRuns({
   onSaveWeek: (groupIds: string[], input: { days: number; startHour: number; endHour: number; everyMinutes: number; callsPerDay: number }) => void;
   onAddToday: (groupIds: string[]) => void;
   onSaveObjective: (hubId: string, objective: string) => void;
+  onSaveLocale: (hubId: string, locale: { timeZone: string; language: string }) => void;
   onToggleGroup: (groupId: string, included: boolean) => void;
   onToggleAccount: (hubId: string, userId: string, included: boolean) => void;
   onSaveVoice: (userId: string, voice: PropVoice) => void;
@@ -695,7 +699,7 @@ function ActiveRuns({
         {regions.length === 0 ? <p className="px-1 py-3 text-sm text-zinc-500">Add prop accounts to a group to put its region in a run.</p> : null}
         {regions.map((region) => {
           const included = region.groups.filter((group) => group.included);
-          const issueCount = runIssueCount(region.snapshot, settings, used, cap);
+          const issueCount = runIssueCount(region.snapshot, settings, used, cap, region.timeZone);
           const objective = region.objective.trim() || "No objective yet";
           return (
             <button
@@ -756,6 +760,7 @@ function ActiveRuns({
           onSaveWeek={onSaveWeek}
           onAddToday={onAddToday}
           onSaveObjective={onSaveObjective}
+          onSaveLocale={onSaveLocale}
           onToggleGroup={onToggleGroup}
           onToggleAccount={onToggleAccount}
           onSaveVoice={onSaveVoice}
@@ -769,11 +774,11 @@ function ActiveRuns({
   );
 }
 
-function runIssueCount(run: ConversationActiveRun, settings: ConversationSettings, used: number, cap: number) {
-  return runIssues(run, settings, used, cap).length;
+function runIssueCount(run: ConversationActiveRun, settings: ConversationSettings, used: number, cap: number, zone: string) {
+  return runIssues(run, settings, used, cap, zone).length;
 }
 
-function runIssues(run: ConversationActiveRun, settings: ConversationSettings, used: number, cap: number) {
+function runIssues(run: ConversationActiveRun, settings: ConversationSettings, used: number, cap: number, zone: string) {
   const waiting = run.waiting + run.running > 0;
   const overdue = run.lines.filter(
     (line) => line.status === "pending" && new Date(line.runAt).getTime() < Date.now() - 10 * 60_000,
@@ -786,7 +791,7 @@ function runIssues(run: ConversationActiveRun, settings: ConversationSettings, u
       : []),
     ...(!settings.enabled && waiting ? ["Automatic conversations is off, so waiting lines stay unsent."] : []),
     ...(used >= cap && waiting ? ["The daily call cap is used up."] : []),
-    ...(!withinActiveHours(settings.activeStartHour, settings.activeEndHour) && waiting
+    ...(!withinActiveHours(settings.activeStartHour, settings.activeEndHour, hourIn(zone)) && waiting
       ? ["Outside the hours it is allowed to send."]
       : []),
     ...new Set(run.lines.map((line) => line.error).filter((error): error is string => Boolean(error))),
@@ -942,6 +947,7 @@ function RunScreen({
   onSaveWeek,
   onAddToday,
   onSaveObjective,
+  onSaveLocale,
   onToggleGroup,
   onToggleAccount,
   onSaveVoice,
@@ -969,6 +975,7 @@ function RunScreen({
   onSaveWeek: (groupIds: string[], input: { days: number; startHour: number; endHour: number; everyMinutes: number; callsPerDay: number }) => void;
   onAddToday: (groupIds: string[]) => void;
   onSaveObjective: (hubId: string, objective: string) => void;
+  onSaveLocale: (hubId: string, locale: { timeZone: string; language: string }) => void;
   onToggleGroup: (groupId: string, included: boolean) => void;
   onToggleAccount: (hubId: string, userId: string, included: boolean) => void;
   onSaveVoice: (userId: string, voice: PropVoice) => void;
@@ -1001,6 +1008,8 @@ function RunScreen({
   const [draft, setDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [objective, setObjective] = useState(region.objective);
+  const [timeZone, setTimeZone] = useState(region.timeZone);
+  const [language, setLanguage] = useState(region.language);
   const [openVoiceId, setOpenVoiceId] = useState<string | null>(null);
   const [tab, setTab] = useState<RunTab>("overview");
   const [rosterGroupId, setRosterGroupId] = useState("");
@@ -1012,6 +1021,11 @@ function RunScreen({
   useEffect(() => {
     setObjective(region.objective);
   }, [region.hubId, region.objective]);
+
+  useEffect(() => {
+    setTimeZone(region.timeZone);
+    setLanguage(region.language);
+  }, [region.hubId, region.timeZone, region.language]);
 
   useEffect(() => {
     setTab("overview");
@@ -1074,9 +1088,9 @@ function RunScreen({
   }, [editingId, onClose]);
 
   const personaById = useMemo(() => new Map(personas.map((persona) => [persona.userId, persona])), [personas]);
-  const issues = runIssues(run, settings, used, cap);
+  const issues = runIssues(run, settings, used, cap, region.timeZone);
   const topic = splitRunTopic(run.topic);
-  const inHours = withinActiveHours(settings.activeStartHour, settings.activeEndHour);
+  const inHours = withinActiveHours(settings.activeStartHour, settings.activeEndHour, hourIn(region.timeZone));
   const hasWork = run.waiting + run.running > 0;
   const status =
     issues.length > 0 || run.failed > 0
@@ -1959,6 +1973,44 @@ function RunScreen({
                   </div>
                 </section>
                 <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+                  <h3 className="text-sm font-semibold text-zinc-50">Local time and language</h3>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {region.place ? `${region.place}. ` : ""}
+                    Week hours, active hours, and daily caps count in this time zone. Props write in this language.
+                    {region.localeSource === "region" ? " Set on this region." : " Taken from the nearest listed city."}
+                  </p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-zinc-400">Time zone</span>
+                      <input
+                        value={timeZone}
+                        disabled={busy || !region.hubId}
+                        onChange={(event) => setTimeZone(event.target.value)}
+                        placeholder="America/New_York"
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none focus:border-cyan-400/50 disabled:opacity-50"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-zinc-400">Language</span>
+                      <input
+                        value={language}
+                        disabled={busy || !region.hubId}
+                        onChange={(event) => setLanguage(event.target.value)}
+                        placeholder="English"
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none focus:border-cyan-400/50 disabled:opacity-50"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy || !region.hubId || (timeZone.trim() === region.timeZone && language.trim() === region.language)}
+                    onClick={() => onSaveLocale(region.hubId, { timeZone, language })}
+                    className="mt-3 rounded-xl border border-cyan-400/30 px-3 py-1.5 text-sm text-cyan-100 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </section>
+                <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
                   <h3 className="text-sm font-semibold text-zinc-50">Settings</h3>
                   <p className="mt-1 text-xs text-zinc-500">Grammar, abbreviations, rules, cuss words, and the week apply to every included group.</p>
                 </section>
@@ -2161,7 +2213,7 @@ function RunScreen({
                       <h3 className="text-sm font-semibold text-zinc-50">This week</h3>
                       <p className="mt-1 text-xs text-zinc-500">
                         {weekOn
-                          ? describeWeek(weekDays, weekStart, weekEnd, weekEveryHours * 60, callsPerDay)
+                          ? `${describeWeek(weekDays, weekStart, weekEnd, weekEveryHours * 60, callsPerDay)}. Hours are ${region.timeZone} time.`
                           : "Off. This run is not on a weekly schedule."}
                       </p>
                     </div>

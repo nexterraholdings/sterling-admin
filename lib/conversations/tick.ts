@@ -6,7 +6,20 @@ import { accountPace, broughtUpSubject, lineVoice, startWeight, wantsToJumpIn } 
 import { loadRunMomentForJob, recordRunMoment } from "@/lib/conversations/moments";
 import { loadExcludedByGroup, loadObjectivesByGroup, loadPausedGroupIds } from "@/lib/conversations/region-runs";
 import { GROQ_MODEL, GroqCallError, personalityOrDefault, topicOrDefault, writeConversationLine } from "@/lib/conversations/groq";
-import { minutesFromNow, nyDateKey, nyDayKeysAhead, nyHour, nyInstant, nyWeekday, startOfNyDay, withinActiveHours } from "@/lib/conversations/time";
+import {
+  dateKeyIn,
+  dayKeysAheadIn,
+  hourIn,
+  instantIn,
+  minutesFromNow,
+  startOfDayIn,
+  startOfNyDay,
+  weekdayIn,
+  withinActiveHours,
+} from "@/lib/conversations/time";
+import { loadGroupLocales, zoneFor, type HubLocale } from "@/lib/conversations/hub-locale";
+import { loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
+import type { KnowledgeFact } from "@/lib/knowledge/types";
 import { parseAbbrev, parseGrammar, parseRunRules, parseSwearRate, type SwearRate } from "@/lib/conversations/rules";
 import {
   dayOn,
@@ -256,15 +269,19 @@ function weekWindow(row: {
   };
 }
 
-function weekIsOpen(window: WeekWindow, date = new Date()): boolean {
+function weekIsOpen(window: WeekWindow, zone: string, date = new Date()): boolean {
   if (window.days === 0 || window.endHour <= window.startHour) return false;
-  return dayOn(window.days, nyWeekday(date)) && withinActiveHours(window.startHour, window.endHour, nyHour(date));
+  return dayOn(window.days, weekdayIn(zone, date)) && withinActiveHours(window.startHour, window.endHour, hourIn(zone, date));
 }
 
-function weekSlots(window: WeekWindow, dayKey: string, now: Date): Date[] {
-  if (!dayOn(window.days, nyWeekday(nyInstant(dayKey, 12, 0)))) return [];
-  const start = nyInstant(dayKey, window.startHour, 0);
-  const end = window.endHour >= 24 ? new Date(nyInstant(dayKey, 23, 0).getTime() + 60 * 60_000) : nyInstant(dayKey, window.endHour, 0);
+function windowEnd(zone: string, dayKey: string, endHour: number): Date {
+  return endHour >= 24 ? new Date(instantIn(zone, dayKey, 23, 0).getTime() + 60 * 60_000) : instantIn(zone, dayKey, endHour, 0);
+}
+
+function weekSlots(window: WeekWindow, zone: string, dayKey: string, now: Date): Date[] {
+  if (!dayOn(window.days, weekdayIn(zone, instantIn(zone, dayKey, 12, 0)))) return [];
+  const start = instantIn(zone, dayKey, window.startHour, 0);
+  const end = windowEnd(zone, dayKey, window.endHour);
   const slots: Date[] = [];
   for (let at = start.getTime(); at < end.getTime(); at += window.everyMinutes * 60_000) {
     if (at < now.getTime() - 60_000) continue;
@@ -273,16 +290,19 @@ function weekSlots(window: WeekWindow, dayKey: string, now: Date): Date[] {
   return slots;
 }
 
-function nextWeekSlot(window: WeekWindow, after = new Date()): string {
-  const keys = nyDayKeysAhead(8, after);
+function nextWeekSlot(window: WeekWindow, zone: string, after = new Date()): string {
+  const keys = dayKeysAheadIn(zone, 8, after);
   for (const key of keys) {
-    const slot = weekSlots(window, key, after).find((item) => item.getTime() > after.getTime() + 60_000);
+    const slot = weekSlots(window, zone, key, after).find((item) => item.getTime() > after.getTime() + 60_000);
     if (slot) return slot.toISOString();
   }
   return new Date(after.getTime() + 60 * 60_000).toISOString();
 }
 
-export async function fillWeekForGroup(groupId: string, options?: { replaceFuture?: boolean; castIds?: string[] }): Promise<number> {
+export async function fillWeekForGroup(
+  groupId: string,
+  options?: { replaceFuture?: boolean; castIds?: string[]; zone?: string },
+): Promise<number> {
   const { data: row, error } = await supabaseAdmin
     .from("prop_conversation_groups")
     .select("group_id, topic, replies_per_post, week_days, week_start_hour, week_end_hour, week_every_minutes, calls_per_day")
@@ -293,6 +313,7 @@ export async function fillWeekForGroup(groupId: string, options?: { replaceFutur
   if ((await loadPausedGroupIds()).has(groupId)) return 0;
   const window = weekWindow(row);
   if (window.days === 0 || window.endHour <= window.startHour) return 0;
+  const zone = options?.zone ?? zoneFor(await loadGroupLocales([groupId]), groupId);
 
   if (options?.replaceFuture) await clearFutureStartPosts(groupId);
 
@@ -312,7 +333,7 @@ export async function fillWeekForGroup(groupId: string, options?: { replaceFutur
     .eq("group_id", groupId)
     .eq("kind", "start_post")
     .in("status", ["pending", "running", "done"])
-    .gte("run_at", startOfNyDay())
+    .gte("run_at", startOfDayIn(zone))
     .lt("run_at", horizon);
   if (existingError) throw new Error(existingError.message);
   const existingRows = (existing ?? []) as Array<{ run_at: string; keep_today: boolean | null }>;
@@ -321,10 +342,10 @@ export async function fillWeekForGroup(groupId: string, options?: { replaceFutur
   const limit = postsInWindow(window.startHour, window.endHour, window.everyMinutes, window.callsPerDay, window.repliesPerPost);
   let created = 0;
 
-  for (const dayKey of nyDayKeysAhead(7, now)) {
-    const dayCount = scheduledTimes.filter((at) => nyDateKey(new Date(at)) === dayKey).length;
+  for (const dayKey of dayKeysAheadIn(zone, 7, now)) {
+    const dayCount = scheduledTimes.filter((at) => dateKeyIn(zone, new Date(at)) === dayKey).length;
     let room = limit - dayCount;
-    for (const slot of weekSlots(window, dayKey, now)) {
+    for (const slot of weekSlots(window, zone, dayKey, now)) {
       if (room <= 0) break;
       if (taken.some((at) => Math.abs(at - slot.getTime()) < 20 * 60_000)) continue;
       const authorId = pickWeighted(members, (id) => startWeight(voices.get(id)), lastAuthor ? [lastAuthor] : []);
@@ -376,13 +397,14 @@ export async function addPostsForToday(groupId: string, count = 1): Promise<numb
   if (window.days === 0 || window.endHour <= window.startHour) {
     throw new Error("Turn on the week schedule before adding posts for today.");
   }
-  const today = nyDateKey();
-  if (!dayOn(window.days, nyWeekday(nyInstant(today, 12, 0)))) {
+  const zone = zoneFor(await loadGroupLocales([groupId]), groupId);
+  const today = dateKeyIn(zone);
+  if (!dayOn(window.days, weekdayIn(zone, instantIn(zone, today, 12, 0)))) {
     throw new Error("Today is not on this week's schedule.");
   }
 
   const now = new Date();
-  const end = window.endHour >= 24 ? new Date(nyInstant(today, 23, 0).getTime() + 60 * 60_000) : nyInstant(today, window.endHour, 0);
+  const end = windowEnd(zone, today, window.endHour);
   if (now.getTime() >= end.getTime() - 60_000) throw new Error("Today's window has already ended.");
 
   const excluded = (await loadExcludedByGroup()).get(groupId);
@@ -397,7 +419,7 @@ export async function addPostsForToday(groupId: string, count = 1): Promise<numb
     .eq("group_id", groupId)
     .eq("kind", "start_post")
     .in("status", ["pending", "running", "done"])
-    .gte("run_at", startOfNyDay())
+    .gte("run_at", startOfDayIn(zone))
     .lt("run_at", new Date(end.getTime() + 60_000).toISOString());
   if (existingError) throw new Error(existingError.message);
   const taken = ((existing ?? []) as Array<{ run_at: string; author_id: string }>).map((item) => new Date(item.run_at).getTime());
@@ -410,7 +432,7 @@ export async function addPostsForToday(groupId: string, count = 1): Promise<numb
   }
 
   const free: Date[] = [];
-  const start = nyInstant(today, window.startHour, 0);
+  const start = instantIn(zone, today, window.startHour, 0);
   for (let at = start.getTime(); at < end.getTime(); at += window.everyMinutes * 60_000) {
     if (at < now.getTime() + 60_000 || collides(at)) continue;
     free.push(new Date(at));
@@ -457,7 +479,12 @@ export async function addPostsForToday(groupId: string, count = 1): Promise<numb
   return created;
 }
 
-async function planJobs(manual: boolean, since: string, members: MemberMap): Promise<number> {
+async function planJobs(
+  manual: boolean,
+  members: MemberMap,
+  locales: Map<string, HubLocale>,
+  openGroups: Set<string> | null,
+): Promise<number> {
   const { data: groups, error } = await supabaseAdmin
     .from("prop_conversation_groups")
     .select("group_id, topic, posts_per_day, replies_per_post, week_days, week_start_hour, week_end_hour, week_every_minutes, calls_per_day")
@@ -476,9 +503,12 @@ async function planJobs(manual: boolean, since: string, members: MemberMap): Pro
     const excluded = excludedByGroup.get(groupId);
     const memberIds = (members.get(groupId) ?? []).filter((id) => !excluded?.has(id));
     if (memberIds.length < 2) continue;
+    const zone = zoneFor(locales, groupId);
+    const since = startOfDayIn(zone);
     if (parseWeekDays(group.week_days) > 0) {
-      planned += await fillWeekForGroup(groupId);
+      planned += await fillWeekForGroup(groupId, { zone });
     } else {
+    if (openGroups && !openGroups.has(groupId)) continue;
 
     const { count: postsToday, error: countError } = await supabaseAdmin
       .from("prop_engagement_jobs")
@@ -758,7 +788,7 @@ async function planManualRun(run: ManualRunRequest, members: MemberMap): Promise
       groupId,
       memberIds: accountIds,
       maxNew: Math.max(1, Math.min(4, replies || 1)),
-      sinceIso: startOfNyDay(),
+      sinceIso: startOfDayIn(zoneFor(await loadGroupLocales([groupId]), groupId)),
       immediateFirst: run.startNow || (!natural && durationMinutes === 0),
     });
   }
@@ -821,12 +851,20 @@ async function nextDueJob(groupId?: string, jobId?: string, groupIds?: string[],
   return (data as JobRow | null) ?? null;
 }
 
-async function callsByGroupSince(since: string): Promise<Map<string, number>> {
+/** Calls per group since midnight in that group's own city. */
+async function callsByGroupToday(locales: Map<string, HubLocale>): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
-  const { data: calls, error } = await supabaseAdmin.from("prop_groq_calls").select("job_id").gte("created_at", since).limit(2000);
+  const lookback = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
+  const { data: calls, error } = await supabaseAdmin
+    .from("prop_groq_calls")
+    .select("job_id, created_at")
+    .gte("created_at", lookback)
+    .limit(4000);
   if (error) throw new Error(error.message);
-  const callJobIds = ((calls ?? []) as Array<{ job_id: string | null }>).map((row) => String(row.job_id ?? "")).filter(Boolean);
-  const ids = [...new Set(callJobIds)];
+  const callRows = ((calls ?? []) as Array<{ job_id: string | null; created_at: string }>)
+    .map((row) => ({ jobId: String(row.job_id ?? ""), at: new Date(row.created_at).getTime() }))
+    .filter((row) => row.jobId);
+  const ids = [...new Set(callRows.map((row) => row.jobId))];
   const groupOf = new Map<string, string>();
   for (let index = 0; index < ids.length; index += 80) {
     const chunk = ids.slice(index, index + 80);
@@ -834,9 +872,16 @@ async function callsByGroupSince(since: string): Promise<Map<string, number>> {
     if (jobError) throw new Error(jobError.message);
     for (const row of (jobs ?? []) as Array<{ id: string; group_id: string }>) groupOf.set(String(row.id), String(row.group_id));
   }
-  for (const id of callJobIds) {
-    const groupId = groupOf.get(id);
+  const dayStart = new Map<string, number>();
+  for (const row of callRows) {
+    const groupId = groupOf.get(row.jobId);
     if (!groupId) continue;
+    let start = dayStart.get(groupId);
+    if (start === undefined) {
+      start = new Date(startOfDayIn(zoneFor(locales, groupId))).getTime();
+      dayStart.set(groupId, start);
+    }
+    if (row.at < start) continue;
     counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
   }
   return counts;
@@ -865,19 +910,27 @@ export async function runConversationTick(options: {
   if (run?.keepGoing && !settings.enabled) {
     throw new Error("Turn automatic conversations on to keep this conversation going on its own.");
   }
-  const globalOpen = options.manual || withinActiveHours(settings.activeStartHour, settings.activeEndHour);
-  let weekOnly: string[] | null = null;
-  if (!globalOpen) {
-    const { data: weekRows, error: weekError } = await supabaseAdmin
-      .from("prop_conversation_groups")
-      .select("group_id, week_days, week_start_hour, week_end_hour, week_every_minutes, calls_per_day")
-      .eq("enabled", true)
-      .gt("week_days", 0);
-    if (weekError) throw new Error(weekError.message);
-    weekOnly = ((weekRows ?? []) as EnabledGroup[])
-      .filter((row) => weekIsOpen(weekWindow(row)))
-      .map((row) => String(row.group_id));
-    if (weekOnly.length === 0) {
+  const { data: enabledRows, error: enabledError } = await supabaseAdmin
+    .from("prop_conversation_groups")
+    .select("group_id, week_days, week_start_hour, week_end_hour, week_every_minutes, calls_per_day")
+    .eq("enabled", true);
+  if (enabledError) throw new Error(enabledError.message);
+  const enabledGroups = (enabledRows ?? []) as EnabledGroup[];
+  const locales = await loadGroupLocales([...enabledGroups.map((row) => String(row.group_id)), ...(run ? [run.groupId] : [])]);
+  let openGroups: Set<string> | null = null;
+  if (!options.manual) {
+    openGroups = new Set(
+      enabledGroups
+        .filter((row) => {
+          const zone = zoneFor(locales, String(row.group_id));
+          const week = weekWindow(row);
+          return week.days > 0
+            ? weekIsOpen(week, zone)
+            : withinActiveHours(settings.activeStartHour, settings.activeEndHour, hourIn(zone));
+        })
+        .map((row) => String(row.group_id)),
+    );
+    if (openGroups.size === 0) {
       result.skipped = "quiet_hours";
       return result;
     }
@@ -901,10 +954,8 @@ export async function runConversationTick(options: {
           ? `${clampRun(run.durationMinutes, 0, 360)} minutes`
           : "now";
     result.notes.push(`Queued ${result.planned} ${result.planned === 1 ? "post" : "posts"} for ${windowLabel}.`);
-  } else if (!onlyJob && !weekOnly) {
-    result.planned = await planJobs(options.manual, since, members);
-  } else if (weekOnly) {
-    for (const groupId of weekOnly) result.planned += await fillWeekForGroup(groupId);
+  } else if (!onlyJob) {
+    result.planned = await planJobs(options.manual, members, locales, openGroups);
   }
   const callCap = onlyJob ? 1 : run ? clampRun(run.maxCalls, 1, 6) : MAX_CALLS_PER_TICK;
 
@@ -955,11 +1006,12 @@ export async function runConversationTick(options: {
         : existing?.week ?? weekWindow({}),
     });
   }
-  const callsByGroup = await callsByGroupSince(since);
+  const callsByGroup = await callsByGroupToday(locales);
   const personas = await loadAccountVoices();
   const objectives = await loadObjectivesByGroup();
   const excludedByGroup = await loadExcludedByGroup();
   const pausedGroups = !onlyJob && !run ? [...(await loadPausedGroupIds())] : [];
+  const watchedHubs = await loadWatchedHubIds();
 
   const deferred = new Set<string>();
   let executed = 0;
@@ -968,10 +1020,11 @@ export async function runConversationTick(options: {
       result.skipped = result.calls > 0 ? null : "budget";
       break;
     }
-    const job = await nextDueJob(run?.groupId, onlyJob, weekOnly ?? undefined, pausedGroups);
+    const job = await nextDueJob(run?.groupId, onlyJob, openGroups ? [...openGroups] : undefined, pausedGroups);
     if (!job) break;
 
     const group = topics.get(job.group_id);
+    const zone = zoneFor(locales, job.group_id);
     const excluded = excludedByGroup.get(job.group_id);
     if (excluded?.has(job.author_id)) {
       await finishJob(job.id, { status: "skipped", error: "Left out of the run", finished_at: new Date().toISOString() });
@@ -979,7 +1032,7 @@ export async function runConversationTick(options: {
     }
     const memberIds = (members.get(job.group_id) ?? []).filter((id) => !excluded?.has(id));
     const keepToday = Boolean(job.keep_today);
-    if (keepToday && nyDateKey(new Date(job.run_at)) !== nyDateKey()) {
+    if (keepToday && dateKeyIn(zone, new Date(job.run_at)) !== dateKeyIn(zone)) {
       await finishJob(job.id, {
         status: "skipped",
         error: "It was only scheduled for that day",
@@ -994,11 +1047,11 @@ export async function runConversationTick(options: {
         (usedToday >= group.week.callsPerDay ||
           (job.kind === "start_post" && usedToday + 1 + group.repliesPerPost > group.week.callsPerDay)),
     );
-    if (!keepToday && scheduled && group && (!weekIsOpen(group.week) || overCap)) {
+    if (!keepToday && scheduled && group && (!weekIsOpen(group.week, zone) || overCap)) {
       if (deferred.has(job.id)) break;
       deferred.add(job.id);
-      const after = overCap ? nyInstant(nyDayKeysAhead(2)[1] ?? nyDateKey(), 0, 0) : new Date();
-      await finishJob(job.id, { status: "pending", error: null, run_at: nextWeekSlot(group.week, after) });
+      const after = overCap ? instantIn(zone, dayKeysAheadIn(zone, 2)[1] ?? dateKeyIn(zone), 0, 0) : new Date();
+      await finishJob(job.id, { status: "pending", error: null, run_at: nextWeekSlot(group.week, zone, after) });
       continue;
     }
 
@@ -1006,7 +1059,7 @@ export async function runConversationTick(options: {
       if (scheduled && group) {
         if (deferred.has(job.id)) break;
         deferred.add(job.id);
-        await finishJob(job.id, { status: "pending", error: null, run_at: nextWeekSlot(group.week) });
+        await finishJob(job.id, { status: "pending", error: null, run_at: nextWeekSlot(group.week, zone) });
         continue;
       }
       await finishJob(job.id, {
@@ -1060,6 +1113,24 @@ export async function runConversationTick(options: {
 
     const thread = job.kind === "reply" && job.parent_comment_id ? await threadForReply(job.parent_comment_id, parentBody) : [];
 
+    const locale = locales.get(job.group_id);
+    let fact: KnowledgeFact | null = null;
+    if (job.kind === "start_post" && locale && watchedHubs.has(locale.hubId)) {
+      fact = await pickFactForGroup(locale.hubId, job.group_id);
+      if (!fact) {
+        await finishJob(job.id, {
+          status: "skipped",
+          error: "No fresh approved knowledge for this city",
+          finished_at: new Date().toISOString(),
+        });
+        result.notes.push(`Skipped a post in ${locale.place || "a watched hub"}: nothing approved in the knowledge hub.`);
+        continue;
+      }
+      await finishJob(job.id, { knowledge_item_id: fact.id });
+    } else if (job.kind === "reply" && job.parent_comment_id) {
+      fact = await loadFactForThread(job.parent_comment_id);
+    }
+
     let line: Awaited<ReturnType<typeof writeConversationLine>>;
     try {
       const speaking = lineVoice(personas.get(job.author_id), group);
@@ -1079,6 +1150,9 @@ export async function runConversationTick(options: {
         swearRate: speaking.swearRate,
         grammar: speaking.grammar,
         abbrev: speaking.abbrev,
+        place: fact ? locale?.place : undefined,
+        language: locale?.language,
+        fact,
       });
     } catch (error) {
       const groqError = error instanceof GroqCallError ? error : null;
@@ -1137,6 +1211,7 @@ export async function runConversationTick(options: {
       });
       result.published += 1;
       result.notes.push(line.text);
+      if (job.kind === "start_post" && fact) await markFactUsed(fact.id);
       if (job.kind === "start_post") {
         const cast = Array.isArray(job.cast_ids) ? job.cast_ids.map((id) => String(id)).filter(Boolean) : [];
         const natural = naturalGap(job.spread_minutes);

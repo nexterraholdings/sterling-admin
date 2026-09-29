@@ -1,80 +1,112 @@
-const NY = "America/New_York";
+export const DEFAULT_ZONE = "America/New_York";
 
-export function nyDateKey(date = new Date()): string {
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+export function isTimeZone(value: string | null | undefined): value is string {
+  if (!value?.trim()) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value.trim() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function dateKeyIn(zone: string, date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: NY,
+    timeZone: zone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(date);
 }
 
-export function nyHour(date = new Date()): number {
+export function hourIn(zone: string, date = new Date()): number {
   const hour = new Intl.DateTimeFormat("en-US", {
-    timeZone: NY,
+    timeZone: zone,
     hour: "2-digit",
     hourCycle: "h23",
   }).format(date);
   return Number(hour);
 }
 
-const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-
-export function nyWeekday(date = new Date()): number {
-  const label = new Intl.DateTimeFormat("en-US", { timeZone: NY, weekday: "short" }).format(date);
+export function weekdayIn(zone: string, date = new Date()): number {
+  const label = new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short" }).format(date);
   return WEEKDAY_INDEX[label] ?? 0;
 }
 
-/** UTC instant of an hour and minute on an America/New_York calendar day (`YYYY-MM-DD`). */
-export function nyInstant(dayKey: string, hour: number, minute = 0): Date {
-  const hh = String(Math.min(23, Math.max(0, hour))).padStart(2, "0");
-  const mm = String(Math.min(59, Math.max(0, minute))).padStart(2, "0");
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: NY,
-    hour: "2-digit",
-    hourCycle: "h23",
-    minute: "2-digit",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  for (const offset of ["-04:00", "-05:00"]) {
-    const instant = new Date(`${dayKey}T${hh}:${mm}:00${offset}`);
-    const parts = Object.fromEntries(fmt.formatToParts(instant).map((part) => [part.type, part.value]));
-    const got = `${parts.year}-${parts.month}-${parts.day}`;
-    if (got === dayKey && Number(parts.hour) === Number(hh) && Number(parts.minute) === Number(mm)) return instant;
-  }
-  return new Date(`${dayKey}T${hh}:${mm}:00-04:00`);
+function zoneOffsetMs(zone: string, at: number): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(new Date(at))
+      .map((part) => [part.type, part.value]),
+  );
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  return asUtc - Math.floor(at / 1000) * 1000;
 }
 
-export function nyDayKeysAhead(count: number, from = new Date()): string[] {
+/** UTC instant of an hour and minute on a calendar day (`YYYY-MM-DD`) in `zone`. */
+export function instantIn(zone: string, dayKey: string, hour: number, minute = 0): Date {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  const wall = Date.UTC(year ?? 1970, (month ?? 1) - 1, day ?? 1, Math.min(23, Math.max(0, hour)), Math.min(59, Math.max(0, minute)));
+  let at = wall - zoneOffsetMs(zone, wall);
+  at = wall - zoneOffsetMs(zone, at);
+  return new Date(at);
+}
+
+export function dayKeysAheadIn(zone: string, count: number, from = new Date()): string[] {
   const keys: string[] = [];
-  let cursor = nyInstant(nyDateKey(from), 12, 0);
+  let cursor = instantIn(zone, dateKeyIn(zone, from), 12, 0);
   for (let index = 0; index < count; index += 1) {
-    keys.push(nyDateKey(cursor));
+    keys.push(dateKeyIn(zone, cursor));
     cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
   }
   return keys;
 }
 
-/** UTC instant of midnight in America/New_York for the NY calendar day of `date`. */
+/** UTC instant of midnight in `zone` for that zone's calendar day of `date`. */
+export function startOfDayIn(zone: string, date = new Date()): string {
+  return instantIn(zone, dateKeyIn(zone, date), 0, 0).toISOString();
+}
+
+export function nyDateKey(date = new Date()): string {
+  return dateKeyIn(DEFAULT_ZONE, date);
+}
+
+export function nyHour(date = new Date()): number {
+  return hourIn(DEFAULT_ZONE, date);
+}
+
+export function nyWeekday(date = new Date()): number {
+  return weekdayIn(DEFAULT_ZONE, date);
+}
+
+export function nyInstant(dayKey: string, hour: number, minute = 0): Date {
+  return instantIn(DEFAULT_ZONE, dayKey, hour, minute);
+}
+
+export function nyDayKeysAhead(count: number, from = new Date()): string[] {
+  return dayKeysAheadIn(DEFAULT_ZONE, count, from);
+}
+
 export function startOfNyDay(date = new Date()): string {
-  const key = nyDateKey(date);
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: NY,
-    hour: "2-digit",
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  for (const offset of ["-04:00", "-05:00"]) {
-    const instant = new Date(`${key}T00:00:00${offset}`);
-    const parts = Object.fromEntries(fmt.formatToParts(instant).map((part) => [part.type, part.value]));
-    const got = `${parts.year}-${parts.month}-${parts.day}`;
-    if (got === key && parts.hour === "00") return instant.toISOString();
-  }
-  return new Date(`${key}T04:00:00.000Z`).toISOString();
+  return startOfDayIn(DEFAULT_ZONE, date);
 }
 
 /** `endHour` is exclusive. Equal hours means the window is open all day. */

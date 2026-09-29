@@ -10,6 +10,11 @@ create table if not exists public.prop_region_runs (
 alter table public.prop_region_runs
   add column if not exists paused boolean not null default false;
 
+-- Null follows the nearest listed city (lib/seeded-hubs/worldCities.ts).
+alter table public.prop_region_runs
+  add column if not exists timezone text,
+  add column if not exists language text;
+
 create table if not exists public.prop_run_exclusions (
   hub_id uuid not null references public.area_discussions (id) on delete cascade,
   user_id uuid not null references public.profiles (id) on delete cascade,

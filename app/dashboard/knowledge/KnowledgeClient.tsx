@@ -22,7 +22,7 @@ const FEED_INFO: Record<KnowledgeFeed, { label: string; hint: string }> = {
   news: { label: "News", hint: "Local headlines from Google News, or GDELT when Google has nothing. Free." },
   weather: { label: "Weather", hint: "Tomorrow's forecast from Open-Meteo, plus US weather alerts. Free." },
   sports: { label: "Sports", hint: "Upcoming games and final scores for the teams you list, from TheSportsDB. Free." },
-  events: { label: "Events", hint: "Concerts, games, and shows within 20 miles from Ticketmaster. Free key." },
+  events: { label: "Events", hint: "Concerts, games, and shows within 20 miles from Ticketmaster. Free key. Mostly the US, Canada, the UK, and parts of Europe." },
   x: { label: "X", hint: "Recent X posts through xAI. Paid, and only runs once XAI_API_KEY has credits." },
 };
 

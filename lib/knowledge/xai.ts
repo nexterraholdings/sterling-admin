@@ -1,16 +1,9 @@
+import type { PulledItem } from "@/lib/knowledge/feeds/shared";
+
 export const XAI_MODEL = process.env.XAI_MODEL?.trim() || "grok-4.7";
 
 const MAX_ITEMS = 8;
 const DEFAULT_FOCUS = "everyday local life: events, openings and closures, weather, transit, sports, food, and things people are talking about";
-
-export type PulledItem = {
-  source: "x" | "web";
-  claim: string;
-  url: string;
-  author: string;
-  postedAt: string | null;
-  imageUrl: string | null;
-};
 
 export type XaiUsage = {
   model: string;

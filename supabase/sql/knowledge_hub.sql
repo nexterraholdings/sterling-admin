@@ -1,14 +1,18 @@
--- Knowledge hub. Watches say what to pull from X for a hub; items are the
--- facts that came back, each with the post URL it was cited from. Opening
--- posts in a hub that has watches are written only from approved items.
--- Service role bypasses RLS. Run after prop_conversations.sql.
+-- Knowledge hub. Watches say what to pull for a hub (news, weather, sports,
+-- events, and optionally X); items are the facts that came back, each with
+-- the URL it came from. Opening posts in a hub that has watches are written
+-- only from approved items.
+-- Service role bypasses RLS. Run after prop_conversations.sql. Safe to re-run.
 
 create table if not exists public.knowledge_watches (
   id uuid primary key default gen_random_uuid(),
   hub_id uuid not null references public.area_discussions (id) on delete cascade,
   label text not null default '',
+  feeds text[] not null default '{news,weather}',
   search_terms text not null default '',
   x_handles text[] not null default '{}',
+  -- Team names looked up on TheSportsDB, e.g. {New York Knicks, Brooklyn Nets}.
+  teams text[] not null default '{}',
   every_minutes integer not null default 180 check (every_minutes >= 30 and every_minutes <= 1440),
   -- review: the checks suggest, an admin decides. auto: the checks decide.
   approval text not null default 'review' check (approval in ('review', 'auto')),
@@ -27,7 +31,7 @@ create table if not exists public.knowledge_items (
   id uuid primary key default gen_random_uuid(),
   watch_id uuid references public.knowledge_watches (id) on delete set null,
   hub_id uuid not null references public.area_discussions (id) on delete cascade,
-  source text not null check (source in ('x', 'web')),
+  source text not null,
   claim text not null,
   source_url text not null,
   author text not null default '',
@@ -45,6 +49,14 @@ create table if not exists public.knowledge_items (
   last_used_at timestamptz,
   unique (hub_id, source_url)
 );
+
+alter table public.knowledge_watches
+  add column if not exists feeds text[] not null default '{news,weather}',
+  add column if not exists teams text[] not null default '{}';
+
+alter table public.knowledge_items drop constraint if exists knowledge_items_source_check;
+alter table public.knowledge_items
+  add constraint knowledge_items_source_check check (source in ('x', 'web', 'news', 'weather', 'sports', 'events'));
 
 create index if not exists knowledge_items_hub_status_idx
   on public.knowledge_items (hub_id, status, expires_at desc);

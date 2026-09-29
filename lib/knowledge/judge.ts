@@ -1,20 +1,22 @@
 import { GROQ_MODEL } from "@/lib/conversations/groq";
-import type { KnowledgeVerdict } from "@/lib/knowledge/types";
+import type { KnowledgeSource, KnowledgeVerdict } from "@/lib/knowledge/types";
 
-export type JudgeInput = { id: string; claim: string; author: string; source: "x" | "web" };
+export type JudgeInput = { id: string; claim: string; author: string; source: KnowledgeSource };
 export type JudgeResult = {
   verdicts: Map<string, { verdict: KnowledgeVerdict; reason: string }>;
   tokens: number;
 };
 
 const RULES = [
+  "Items can be news headlines, posts, event listings, or weather alerts, in any language. Judge the meaning, not the wording.",
   "Approve only when every one of these is true:",
   "- It is about this place or the area around it.",
   "- It is concrete: something that happened, was announced, or is scheduled. Not an opinion, a question, or an ad.",
   "- A neighbor could bring it up in a casual local group chat without it being upsetting or divisive.",
   "Reject anything about elections, candidates, ballot measures, campaigns, or partisan fights.",
   "Reject crimes, accidents, arrests, or lawsuits that name private people.",
-  "Reject deaths, disasters, and tragedies.",
+  "Reject deaths, disasters, and tragedies. Routine weather alerts such as heat, wind, or flood advisories are fine.",
+  "Reject national or world news that only mentions this place in passing.",
   "Reject medical or health claims, and financial or investment claims.",
   "Reject rumors, unconfirmed reports, and anything sexual, hateful, or about a private person.",
 ].join("\n");

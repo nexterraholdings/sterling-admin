@@ -2,11 +2,15 @@ import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { loadHubLocales } from "@/lib/conversations/hub-locale";
 import { xaiConfigured } from "@/lib/knowledge/xai";
+import { ticketmasterConfigured } from "@/lib/knowledge/feeds/events";
+import { DEFAULT_FEEDS, KNOWLEDGE_FEEDS } from "@/lib/knowledge/types";
 import type {
   KnowledgeApproval,
   KnowledgeDashboard,
   KnowledgeFact,
+  KnowledgeFeed,
   KnowledgeHubOption,
+  KnowledgeSource,
   KnowledgeItem,
   KnowledgePull,
   KnowledgeStatus,
@@ -20,8 +24,10 @@ type WatchRow = {
   id: string;
   hub_id: string;
   label: string | null;
+  feeds: string[] | null;
   search_terms: string | null;
   x_handles: string[] | null;
+  teams: string[] | null;
   every_minutes: number | null;
   approval: string | null;
   enabled: boolean | null;
@@ -48,7 +54,8 @@ type ItemRow = {
   used_count: number | null;
 };
 
-const WATCH_SELECT = "id, hub_id, label, search_terms, x_handles, every_minutes, approval, enabled, last_pulled_at, last_error";
+const WATCH_SELECT = "id, hub_id, label, feeds, search_terms, x_handles, teams, every_minutes, approval, enabled, last_pulled_at, last_error";
+const SOURCES: KnowledgeSource[] = ["x", "web", "news", "weather", "sports", "events"];
 const ITEM_SELECT =
   "id, watch_id, hub_id, source, claim, source_url, author, image_url, posted_at, fetched_at, expires_at, status, verdict, reason, decided_by, used_count";
 
@@ -60,6 +67,16 @@ function fail(error: { message?: string; code?: string } | null): never {
 export function parseHandles(value: string | string[]): string[] {
   const parts = Array.isArray(value) ? value : value.split(/[\s,]+/);
   return [...new Set(parts.map((part) => part.trim().replace(/^@+/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 15)).filter(Boolean))].slice(0, 20);
+}
+
+export function parseTeams(value: string | string[]): string[] {
+  const parts = Array.isArray(value) ? value : value.split(/[,\n]+/);
+  return [...new Set(parts.map((part) => part.replace(/\s+/g, " ").trim().slice(0, 60)).filter(Boolean))].slice(0, 4);
+}
+
+export function feedsOf(value: readonly string[] | null | undefined): KnowledgeFeed[] {
+  if (!value) return [...DEFAULT_FEEDS];
+  return KNOWLEDGE_FEEDS.filter((feed) => value.includes(feed));
 }
 
 function approvalOf(value: string | null): KnowledgeApproval {
@@ -74,8 +91,10 @@ function toWatch(row: WatchRow, hubs: Map<string, KnowledgeHubOption>): Knowledg
     hubTitle: hub?.title ?? "Hub",
     place: hub?.place ?? "",
     label: String(row.label ?? ""),
+    feeds: feedsOf(row.feeds),
     searchTerms: String(row.search_terms ?? ""),
     xHandles: parseHandles(row.x_handles ?? []),
+    teams: parseTeams(row.teams ?? []),
     everyMinutes: Number(row.every_minutes ?? 180),
     approval: approvalOf(row.approval),
     enabled: Boolean(row.enabled),
@@ -90,7 +109,7 @@ function toItem(row: ItemRow, hubs: Map<string, KnowledgeHubOption>): KnowledgeI
     watchId: row.watch_id ? String(row.watch_id) : null,
     hubId: String(row.hub_id),
     hubTitle: hubs.get(String(row.hub_id))?.title ?? "Hub",
-    source: row.source === "web" ? "web" : "x",
+    source: SOURCES.find((source) => source === row.source) ?? "web",
     claim: row.claim,
     sourceUrl: row.source_url,
     author: String(row.author ?? ""),
@@ -145,7 +164,12 @@ export async function loadKnowledgeDashboard(): Promise<KnowledgeDashboard> {
   const missing = [watchResult.error, itemResult.error, pullResult.error].find((error) => error && isMissingSchemaError(error));
   if (missing) {
     const hubs = await loadHubOptions([]);
-    return { schemaReady: false, xaiConfigured: xaiConfigured(), loadedAt: Date.now(), hubs: [...hubs.values()], watches: [], items: [], pulls: [] };
+    return {
+      schemaReady: false,
+      xaiConfigured: xaiConfigured(),
+      ticketmasterConfigured: ticketmasterConfigured(),
+      loadedAt: Date.now(),
+      hubs: [...hubs.values()], watches: [], items: [], pulls: [] };
   }
   for (const result of [watchResult, itemResult, pullResult]) if (result.error) throw new Error(result.error.message);
 
@@ -178,6 +202,7 @@ export async function loadKnowledgeDashboard(): Promise<KnowledgeDashboard> {
   return {
     schemaReady: true,
     xaiConfigured: xaiConfigured(),
+    ticketmasterConfigured: ticketmasterConfigured(),
     loadedAt: Date.now(),
     hubs: [...hubs.values()].sort((a, b) => a.title.localeCompare(b.title)),
     watches: watchRows.map((row) => toWatch(row, hubs)),
@@ -193,8 +218,10 @@ function watchPatch(input: KnowledgeWatchInput) {
   return {
     hub_id: input.hubId,
     label,
+    feeds: feedsOf(input.feeds),
     search_terms: searchTerms,
     x_handles: parseHandles(input.xHandles),
+    teams: parseTeams(input.teams),
     every_minutes: everyMinutes,
     approval: approvalOf(input.approval),
     enabled: Boolean(input.enabled),
@@ -202,10 +229,15 @@ function watchPatch(input: KnowledgeWatchInput) {
   };
 }
 
+function checkPatch(patch: ReturnType<typeof watchPatch>) {
+  if (patch.feeds.length === 0) throw new Error("Turn on at least one source.");
+  if (patch.feeds.includes("sports") && patch.teams.length === 0) throw new Error("Add at least one team for sports, or turn sports off.");
+}
+
 export async function createWatch(input: KnowledgeWatchInput): Promise<string> {
   if (!input.hubId) throw new Error("Pick a hub to watch.");
   const patch = watchPatch(input);
-  if (!patch.search_terms && patch.x_handles.length === 0) throw new Error("Add something to search for or at least one X account.");
+  checkPatch(patch);
   const { data, error } = await supabaseAdmin.from("knowledge_watches").insert(patch).select("id").single();
   if (error) fail(error);
   return String(data.id);
@@ -213,7 +245,7 @@ export async function createWatch(input: KnowledgeWatchInput): Promise<string> {
 
 export async function updateWatch(id: string, input: KnowledgeWatchInput): Promise<void> {
   const patch = watchPatch(input);
-  if (!patch.search_terms && patch.x_handles.length === 0) throw new Error("Add something to search for or at least one X account.");
+  checkPatch(patch);
   const { error } = await supabaseAdmin.from("knowledge_watches").update(patch).eq("id", id);
   if (error) fail(error);
 }

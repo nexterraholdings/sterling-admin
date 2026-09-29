@@ -5,15 +5,35 @@ import { toast } from "sonner";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { EmptyState, FilterChip, formatRelativeTime, MetricPill } from "@/components/admin/ui";
 import { decideItemAction, deleteWatchAction, pullNowAction, refreshKnowledge, saveWatchAction } from "./actions";
+import { DEFAULT_FEEDS, KNOWLEDGE_FEEDS } from "@/lib/knowledge/types";
 import type {
   KnowledgeApproval,
   KnowledgeDashboard,
+  KnowledgeFeed,
   KnowledgeHubOption,
   KnowledgeItem,
+  KnowledgeSource,
   KnowledgeStatus,
   KnowledgeWatch,
   KnowledgeWatchInput,
 } from "@/lib/knowledge/types";
+
+const FEED_INFO: Record<KnowledgeFeed, { label: string; hint: string }> = {
+  news: { label: "News", hint: "Local headlines from Google News, or GDELT when Google has nothing. Free." },
+  weather: { label: "Weather", hint: "Tomorrow's forecast from Open-Meteo, plus US weather alerts. Free." },
+  sports: { label: "Sports", hint: "Upcoming games and final scores for the teams you list, from TheSportsDB. Free." },
+  events: { label: "Events", hint: "Concerts, games, and shows within 20 miles from Ticketmaster. Free key." },
+  x: { label: "X", hint: "Recent X posts through xAI. Paid, and only runs once XAI_API_KEY has credits." },
+};
+
+const SOURCE_LABELS: Record<KnowledgeSource, string> = {
+  x: "X post",
+  web: "Article",
+  news: "News",
+  weather: "Forecast",
+  sports: "Sports",
+  events: "Event",
+};
 
 const inputCls =
   "w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 outline-none transition placeholder:text-zinc-600 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/15 disabled:opacity-50";
@@ -49,11 +69,27 @@ function emptyWatch(hubs: KnowledgeHubOption[]): KnowledgeWatchInput {
   return {
     hubId: hubs[0]?.id ?? "",
     label: "",
+    feeds: [...DEFAULT_FEEDS],
     searchTerms: "",
     xHandles: [],
+    teams: [],
     everyMinutes: 180,
     approval: "review",
     enabled: true,
+  };
+}
+
+function inputOf(watch: KnowledgeWatch): KnowledgeWatchInput {
+  return {
+    hubId: watch.hubId,
+    label: watch.label,
+    feeds: watch.feeds,
+    searchTerms: watch.searchTerms,
+    xHandles: watch.xHandles,
+    teams: watch.teams,
+    everyMinutes: watch.everyMinutes,
+    approval: watch.approval,
+    enabled: watch.enabled,
   };
 }
 
@@ -84,8 +120,9 @@ export function KnowledgeClient({ initial }: { initial: KnowledgeDashboard }) {
       const { dashboard, outcome } = await pullNowAction(watch.id);
       setData(dashboard);
       if (!outcome.ok) toast.error(outcome.error ?? "Pull failed");
-      else if (outcome.kept === 0) toast.success(`Nothing new for ${outcome.hubTitle}. ${outcome.found} found, none passed the citation check or all were already in.`);
+      else if (outcome.kept === 0) toast.success(`Nothing new for ${outcome.hubTitle}. ${outcome.found} found, all too old or already in.`);
       else toast.success(`Added ${outcome.kept} ${outcome.kept === 1 ? "item" : "items"} for ${outcome.hubTitle}.`);
+      if (outcome.ok && outcome.error) toast.warning(outcome.error);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Pull failed");
     } finally {
@@ -127,8 +164,9 @@ export function KnowledgeClient({ initial }: { initial: KnowledgeDashboard }) {
             <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-300/80">Knowledge hub</p>
             <h1 className="mt-2 text-lg font-semibold text-zinc-50">What the props can talk about</h1>
             <p className="mt-1 max-w-2xl text-sm text-zinc-400">
-              Watches pull recent posts from X for a hub. Only items whose link came back in the search citations are kept.
-              Once a hub has a watch, its opening posts are written from one approved item. With nothing approved, that hub stays quiet.
+              Watches pull local news, weather, games, and events for a hub, each with a link to where it came from. News and events go
+              through the checks; forecasts and schedules are built straight from the data. Once a hub has a watch, its opening posts are
+              written from one approved item. With nothing approved, that hub stays quiet.
             </p>
           </div>
           <button
@@ -147,9 +185,14 @@ export function KnowledgeClient({ initial }: { initial: KnowledgeDashboard }) {
             The knowledge tables are not set up yet. Run supabase/sql/knowledge_hub.sql and supabase/sql/prop_region_runs.sql in the Supabase SQL editor.
           </p>
         ) : null}
-        {!data.xaiConfigured ? (
+        {!data.xaiConfigured && data.watches.some((watch) => watch.feeds.includes("x")) ? (
           <p className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
-            XAI_API_KEY is not set on this deployment, so nothing can be pulled from X yet.
+            XAI_API_KEY is not set on this deployment, so the X source is skipped. The other sources still run.
+          </p>
+        ) : null}
+        {!data.ticketmasterConfigured && data.watches.some((watch) => watch.feeds.includes("events")) ? (
+          <p className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+            TICKETMASTER_API_KEY is not set on this deployment, so events cannot be pulled yet. Get a free key at developer.ticketmaster.com.
           </p>
         ) : null}
 
@@ -201,7 +244,7 @@ export function KnowledgeClient({ initial }: { initial: KnowledgeDashboard }) {
           <div className="mt-4">
             <EmptyState
               title="No watches yet"
-              hint={data.hubs.length === 0 ? "Start a conversation run in a hub first. Hubs with prop groups show up here." : "Add a watch to start pulling from X."}
+              hint={data.hubs.length === 0 ? "Start a conversation run in a hub first. Hubs with prop groups show up here." : "Add a watch to start pulling for a hub."}
             />
           </div>
         ) : null}
@@ -225,35 +268,9 @@ export function KnowledgeClient({ initial }: { initial: KnowledgeDashboard }) {
                 key={watch.id}
                 watch={watch}
                 busy={busy}
-                onEdit={() =>
-                  setEditing({
-                    id: watch.id,
-                    input: {
-                      hubId: watch.hubId,
-                      label: watch.label,
-                      searchTerms: watch.searchTerms,
-                      xHandles: watch.xHandles,
-                      everyMinutes: watch.everyMinutes,
-                      approval: watch.approval,
-                      enabled: watch.enabled,
-                    },
-                  })
-                }
+                onEdit={() => setEditing({ id: watch.id, input: inputOf(watch) })}
                 onPull={() => void pullNow(watch)}
-                onToggle={(patch) =>
-                  void run(`watch:${watch.id}`, () =>
-                    saveWatchAction(watch.id, {
-                      hubId: watch.hubId,
-                      label: watch.label,
-                      searchTerms: watch.searchTerms,
-                      xHandles: watch.xHandles,
-                      everyMinutes: watch.everyMinutes,
-                      approval: watch.approval,
-                      enabled: watch.enabled,
-                      ...patch,
-                    }),
-                  )
-                }
+                onToggle={(patch) => void run(`watch:${watch.id}`, () => saveWatchAction(watch.id, { ...inputOf(watch), ...patch }))}
                 onDelete={() => void run(`watch:${watch.id}`, () => deleteWatchAction(watch.id), "Watch deleted.")}
               />
             ),
@@ -360,8 +377,18 @@ function WatchRow({
             {watch.place || "No place name"} · {everyLabel(watch.everyMinutes)} ·{" "}
             {watch.lastPulledAt ? `pulled ${formatRelativeTime(watch.lastPulledAt)}` : "not pulled yet"}
           </p>
+          <p className="mt-2 flex flex-wrap gap-1.5">
+            {watch.feeds.map((feed) => (
+              <span key={feed} className="rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300">
+                {FEED_INFO[feed].label}
+              </span>
+            ))}
+          </p>
           {watch.searchTerms ? <p className="mt-2 text-sm text-zinc-300">{watch.searchTerms}</p> : null}
-          {watch.xHandles.length > 0 ? (
+          {watch.feeds.includes("sports") && watch.teams.length > 0 ? (
+            <p className="mt-1 text-xs text-zinc-400">{watch.teams.join(" · ")}</p>
+          ) : null}
+          {watch.feeds.includes("x") && watch.xHandles.length > 0 ? (
             <p className="mt-1 text-xs text-cyan-200/80">{watch.xHandles.map((handle) => `@${handle}`).join("  ")}</p>
           ) : null}
           {watch.lastError ? <p className="mt-2 text-xs text-rose-300">{watch.lastError}</p> : null}
@@ -444,11 +471,15 @@ function WatchForm({
 }) {
   const [hubId, setHubId] = useState(initial.hubId);
   const [label, setLabel] = useState(initial.label);
+  const [feeds, setFeeds] = useState<KnowledgeFeed[]>(initial.feeds);
   const [searchTerms, setSearchTerms] = useState(initial.searchTerms);
   const [handles, setHandles] = useState(initial.xHandles.map((handle) => `@${handle}`).join(" "));
+  const [teams, setTeams] = useState(initial.teams.join(", "));
   const [everyMinutes, setEveryMinutes] = useState(initial.everyMinutes);
   const [approval, setApproval] = useState<KnowledgeApproval>(initial.approval);
   const place = hubs.find((hub) => hub.id === hubId)?.place;
+  const toggleFeed = (feed: KnowledgeFeed) =>
+    setFeeds((current) => (current.includes(feed) ? current.filter((entry) => entry !== feed) : KNOWLEDGE_FEEDS.filter((entry) => entry === feed || current.includes(entry))));
 
   return (
     <form
@@ -458,8 +489,10 @@ function WatchForm({
         onSave({
           hubId,
           label,
+          feeds,
           searchTerms,
           xHandles: handles.split(/[\s,]+/).filter(Boolean),
+          teams: teams.split(/[,\n]+/).map((team) => team.trim()).filter(Boolean),
           everyMinutes,
           approval,
           enabled: initial.enabled,
@@ -482,27 +515,63 @@ function WatchForm({
         <span className="mb-1 block text-xs text-zinc-400">Name (optional)</span>
         <input value={label} disabled={busy} onChange={(event) => setLabel(event.target.value)} placeholder="Food and openings" className={inputCls} />
       </label>
-      <label className="block sm:col-span-2">
-        <span className="mb-1 block text-xs text-zinc-400">What to look for</span>
-        <textarea
-          value={searchTerms}
-          disabled={busy}
-          onChange={(event) => setSearchTerms(event.target.value)}
-          rows={2}
-          placeholder="Restaurant openings, farmers markets, street closures, local sports"
-          className={`${inputCls} resize-y`}
-        />
-      </label>
-      <label className="block sm:col-span-2">
-        <span className="mb-1 block text-xs text-zinc-400">X accounts to read first (up to 20)</span>
-        <input
-          value={handles}
-          disabled={busy}
-          onChange={(event) => setHandles(event.target.value)}
-          placeholder="@nycgov @NYCTSubway @eater_ny"
-          className={inputCls}
-        />
-      </label>
+      <fieldset className="sm:col-span-2">
+        <legend className="mb-1 block text-xs text-zinc-400">Sources</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {KNOWLEDGE_FEEDS.map((feed) => (
+            <label
+              key={feed}
+              className={`flex cursor-pointer gap-2 rounded-xl border px-3 py-2 ${feeds.includes(feed) ? "border-cyan-400/40 bg-cyan-400/5" : "border-zinc-800"}`}
+            >
+              <input type="checkbox" checked={feeds.includes(feed)} disabled={busy} onChange={() => toggleFeed(feed)} className="mt-0.5 accent-cyan-400" />
+              <span>
+                <span className="block text-sm text-zinc-100">{FEED_INFO[feed].label}</span>
+                <span className="block text-xs text-zinc-500">{FEED_INFO[feed].hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {feeds.includes("news") || feeds.includes("x") ? (
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-xs text-zinc-400">Search words (optional)</span>
+          <textarea
+            value={searchTerms}
+            disabled={busy}
+            onChange={(event) => setSearchTerms(event.target.value)}
+            rows={2}
+            placeholder={`Leave blank to search for "${place?.split(",")[0] || "the city name"}". Example: Williamsburg OR Greenpoint`}
+            className={`${inputCls} resize-y`}
+          />
+          <span className="mt-1 block text-xs text-zinc-500">
+            News searches these words instead of the city name. For cities outside the US, words in the local language work best.
+          </span>
+        </label>
+      ) : null}
+      {feeds.includes("sports") ? (
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-xs text-zinc-400">Teams (up to 4, comma separated)</span>
+          <input
+            value={teams}
+            disabled={busy}
+            onChange={(event) => setTeams(event.target.value)}
+            placeholder="New York Knicks, Brooklyn Nets, New York Yankees"
+            className={inputCls}
+          />
+        </label>
+      ) : null}
+      {feeds.includes("x") ? (
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-xs text-zinc-400">X accounts to read first (up to 20)</span>
+          <input
+            value={handles}
+            disabled={busy}
+            onChange={(event) => setHandles(event.target.value)}
+            placeholder="@nycgov @NYCTSubway @eater_ny"
+            className={inputCls}
+          />
+        </label>
+      ) : null}
       <label className="block">
         <span className="mb-1 block text-xs text-zinc-400">How often</span>
         <select value={everyMinutes} disabled={busy} onChange={(event) => setEveryMinutes(Number(event.target.value))} className={inputCls}>
@@ -530,7 +599,7 @@ function WatchForm({
         </div>
       </div>
       <div className="flex gap-2 sm:col-span-2">
-        <button type="submit" disabled={busy || !hubId} className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-sm text-cyan-100 disabled:opacity-50">
+        <button type="submit" disabled={busy || !hubId || feeds.length === 0} className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-sm text-cyan-100 disabled:opacity-50">
           Save watch
         </button>
         <button type="button" disabled={busy} onClick={onCancel} className="rounded-xl px-3 py-1.5 text-sm text-zinc-400">
@@ -573,7 +642,7 @@ function ItemRow({
         <p className="text-sm text-zinc-50">{item.claim}</p>
         <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500">
           <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-cyan-200/80 hover:text-cyan-100">
-            {item.author || (item.source === "x" ? "X post" : "Article")}
+            {item.author && item.source !== "weather" ? item.author : SOURCE_LABELS[item.source]}
             <ExternalLink className="h-3 w-3" aria-hidden />
           </a>
           <span>{item.hubTitle}</span>

@@ -1,16 +1,30 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { loadHubLocales } from "@/lib/conversations/hub-locale";
-import { citationKey, pullFromX, XaiError, type PulledItem } from "@/lib/knowledge/xai";
+import { DEFAULT_ZONE } from "@/lib/conversations/time";
+import { citationKey, pullFromX, XaiError, xaiConfigured } from "@/lib/knowledge/xai";
 import { judgeItems } from "@/lib/knowledge/judge";
-import { KNOWLEDGE_SCHEMA_HINT, loadDueWatches, loadWatch, parseHandles } from "@/lib/knowledge/db";
+import { KNOWLEDGE_SCHEMA_HINT, feedsOf, loadDueWatches, loadWatch, parseHandles, parseTeams } from "@/lib/knowledge/db";
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
-import type { KnowledgePullOutcome, KnowledgeVerdict } from "@/lib/knowledge/types";
+import { cityOf, countryFor, type FeedContext, type FeedResult, type PulledItem } from "@/lib/knowledge/feeds/shared";
+import { pullNews } from "@/lib/knowledge/feeds/news";
+import { pullWeather } from "@/lib/knowledge/feeds/weather";
+import { pullSports } from "@/lib/knowledge/feeds/sports";
+import { pullEvents } from "@/lib/knowledge/feeds/events";
+import type { KnowledgeFeed, KnowledgePullOutcome, KnowledgeVerdict } from "@/lib/knowledge/types";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** Posted longer ago than this is too old to bring up as news. */
 const STALE_MS = 36 * 60 * 60_000;
 /** Share of words two claims need in common to count as the same story. */
 const DUPLICATE_OVERLAP = 0.6;
+
+const FEED_LABELS: Record<KnowledgeFeed, string> = {
+  news: "News",
+  weather: "Weather",
+  sports: "Sports",
+  events: "Events",
+  x: "X",
+};
 
 type Watch = NonNullable<Awaited<ReturnType<typeof loadWatch>>>;
 
@@ -32,22 +46,30 @@ function overlap(a: Set<string>, b: Set<string>): number {
 }
 
 function expiresAt(item: PulledItem, fetched: number): string {
+  if (item.expiresAt) return item.expiresAt;
   const posted = item.postedAt ? new Date(item.postedAt).getTime() : fetched;
   return new Date(Math.max(posted + DAY_MS, fetched + 6 * 60 * 60_000)).toISOString();
 }
 
-async function recentClaims(hubId: string): Promise<Array<{ key: string | null; words: Set<string> }>> {
+async function recentClaims(hubId: string): Promise<{ urls: Set<string>; keys: Set<string>; stories: Array<Set<string>> }> {
   const { data, error } = await supabaseAdmin
     .from("knowledge_items")
-    .select("claim, source_url")
+    .select("claim, source, source_url")
     .eq("hub_id", hubId)
     .gte("fetched_at", new Date(Date.now() - 3 * DAY_MS).toISOString())
-    .limit(300);
+    .limit(500);
   if (error) throw new Error(error.message);
-  return ((data ?? []) as Array<{ claim: string; source_url: string }>).map((row) => ({
-    key: citationKey(row.source_url),
-    words: words(row.claim),
-  }));
+  const rows = (data ?? []) as Array<{ claim: string; source: string; source_url: string }>;
+  const keys = new Set<string>();
+  for (const row of rows) {
+    const key = citationKey(row.source_url);
+    if (key) keys.add(key);
+  }
+  return {
+    urls: new Set(rows.map((row) => row.source_url)),
+    keys,
+    stories: rows.filter((row) => row.source !== "weather" && row.source !== "sports").map((row) => words(row.claim)),
+  };
 }
 
 async function recordPull(row: {
@@ -79,62 +101,114 @@ async function recordPull(row: {
   if (error) console.error("[knowledge] failed to record pull:", error.message);
 }
 
+async function runFeed(feed: KnowledgeFeed, context: FeedContext): Promise<FeedResult | null> {
+  try {
+    if (feed === "news") return await pullNews(context);
+    if (feed === "weather") return await pullWeather(context);
+    if (feed === "sports") return await pullSports(context);
+    if (feed === "events") return await pullEvents(context);
+    // X stays off until XAI_API_KEY is set, without flagging every pull as an error.
+    if (!xaiConfigured()) return null;
+    const result = await pullFromX({ place: context.place, searchTerms: context.searchTerms, handles: context.handles, now: context.now });
+    return {
+      feed: "x",
+      found: result.found,
+      items: result.items,
+      error: null,
+      xPostsFetched: result.xPostsFetched,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    };
+  } catch (error) {
+    const usage = error instanceof XaiError ? error.usage : null;
+    return {
+      feed,
+      found: 0,
+      items: [],
+      error: error instanceof Error ? error.message : "Pull failed",
+      xPostsFetched: usage?.xPostsFetched,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+    };
+  }
+}
+
 export async function pullWatch(watch: Watch): Promise<KnowledgePullOutcome> {
   const hubId = String(watch.hub_id);
   const locale = (await loadHubLocales([hubId])).get(hubId);
   const hubTitle = locale?.place || "Hub";
   const outcome: KnowledgePullOutcome = { watchId: String(watch.id), hubTitle, ok: false, found: 0, kept: 0, approved: 0, rejected: 0, error: null };
-  const startedAt = new Date().toISOString();
-  await supabaseAdmin.from("knowledge_watches").update({ last_pulled_at: startedAt }).eq("id", watch.id);
+  const now = new Date();
+  await supabaseAdmin.from("knowledge_watches").update({ last_pulled_at: now.toISOString() }).eq("id", watch.id);
 
-  let result: Awaited<ReturnType<typeof pullFromX>>;
-  try {
-    result = await pullFromX({
-      place: locale?.place ?? "",
-      searchTerms: String(watch.search_terms ?? ""),
-      handles: parseHandles(watch.x_handles ?? []),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "xAI pull failed";
-    const usage = error instanceof XaiError ? error.usage : null;
+  const feeds = feedsOf(watch.feeds);
+  const timeZone = locale?.timeZone ?? DEFAULT_ZONE;
+  const place = locale?.place ?? "";
+  const context: FeedContext = {
+    place,
+    city: cityOf(place),
+    searchTerms: String(watch.search_terms ?? ""),
+    language: locale?.language ?? "English",
+    timeZone,
+    country: countryFor(timeZone),
+    lat: locale?.lat ?? null,
+    lng: locale?.lng ?? null,
+    teams: parseTeams(watch.teams ?? []),
+    handles: parseHandles(watch.x_handles ?? []),
+    now,
+  };
+  const results = (await Promise.all(feeds.map((feed) => runFeed(feed, context)))).filter((result): result is FeedResult => result !== null);
+  const errors = results.filter((result) => result.error).map((result) => `${FEED_LABELS[result.feed]}: ${result.error}`);
+  const usage = {
+    model: results.map((result) => result.feed).join("+"),
+    xPostsFetched: results.reduce((sum, result) => sum + (result.xPostsFetched ?? 0), 0),
+    inputTokens: results.reduce((sum, result) => sum + (result.inputTokens ?? 0), 0),
+    outputTokens: results.reduce((sum, result) => sum + (result.outputTokens ?? 0), 0),
+  };
+  outcome.found = results.reduce((sum, result) => sum + result.found, 0);
+  outcome.error = errors.length > 0 ? errors.join(" | ") : null;
+
+  if (results.length === 0 || results.every((result) => result.error)) {
+    const message = outcome.error ?? "Nothing to pull. Turn on at least one source.";
     outcome.error = message;
     await supabaseAdmin.from("knowledge_watches").update({ last_error: message.slice(0, 300) }).eq("id", watch.id);
-    await recordPull({
-      watchId: String(watch.id),
-      hubId,
-      ok: false,
-      model: usage?.model ?? "",
-      found: 0,
-      kept: 0,
-      xPostsFetched: usage?.xPostsFetched ?? 0,
-      inputTokens: usage?.inputTokens ?? 0,
-      outputTokens: usage?.outputTokens ?? 0,
-      judgeTokens: 0,
-      error: message,
-    });
+    await recordPull({ watchId: String(watch.id), hubId, ok: false, found: outcome.found, kept: 0, judgeTokens: 0, error: message, ...usage });
     return outcome;
   }
-  outcome.found = result.found;
 
-  const fetched = Date.now();
+  const fetched = now.getTime();
   const existing = await recentClaims(hubId);
-  const existingKeys = new Set(existing.map((row) => row.key).filter(Boolean));
-  const fresh = result.items.filter((item) => !existingKeys.has(citationKey(item.url)));
+  const pulled = results.flatMap((result) => result.items);
+  const fresh = pulled.filter((item) => {
+    if (existing.urls.has(item.url)) return false;
+    if (item.structured) return true;
+    const key = citationKey(item.url);
+    return !key || !existing.keys.has(key);
+  });
 
-  type Draft = PulledItem & { tempId: string; verdict: KnowledgeVerdict | null; reason: string };
+  type Draft = PulledItem & { tempId: string; verdict: KnowledgeVerdict | null; reason: string; expires: string };
   const drafts: Draft[] = [];
   const kept: Array<Set<string>> = [];
+  const seenUrls = new Set<string>();
   for (const [index, item] of fresh.entries()) {
-    const claimWords = words(item.claim);
-    const draft: Draft = { ...item, tempId: `i${index}`, verdict: null, reason: "" };
+    const expires = expiresAt(item, fetched);
+    if (seenUrls.has(item.url) || new Date(expires).getTime() <= fetched) continue;
+    seenUrls.add(item.url);
+    const draft: Draft = { ...item, tempId: `i${index}`, verdict: null, reason: "", expires };
     if (item.postedAt && fetched - new Date(item.postedAt).getTime() > STALE_MS) {
       draft.verdict = "reject";
       draft.reason = "Posted more than a day and a half ago";
-    } else if ([...existing.map((row) => row.words), ...kept].some((other) => overlap(claimWords, other) >= DUPLICATE_OVERLAP)) {
-      draft.verdict = "reject";
-      draft.reason = "Same story as an item already in this hub";
+    } else if (item.structured) {
+      draft.verdict = "approve";
+      draft.reason = "Built from forecast or schedule data";
+    } else {
+      const claimWords = words(item.claim);
+      if ([...existing.stories, ...kept].some((other) => overlap(claimWords, other) >= DUPLICATE_OVERLAP)) {
+        draft.verdict = "reject";
+        draft.reason = "Same story as an item already in this hub";
+      }
+      kept.push(claimWords);
     }
-    kept.push(claimWords);
     drafts.push(draft);
   }
 
@@ -143,7 +217,7 @@ export async function pullWatch(watch: Watch): Promise<KnowledgePullOutcome> {
   if (toJudge.length > 0) {
     try {
       const judged = await judgeItems(
-        locale?.place ?? "",
+        place,
         toJudge.map((draft) => ({ id: draft.tempId, claim: draft.claim, author: draft.author, source: draft.source })),
       );
       judgeTokens = judged.tokens;
@@ -178,7 +252,7 @@ export async function pullWatch(watch: Watch): Promise<KnowledgePullOutcome> {
       image_url: draft.imageUrl,
       posted_at: draft.postedAt,
       fetched_at: new Date(fetched).toISOString(),
-      expires_at: expiresAt(draft, fetched),
+      expires_at: draft.expires,
       status,
       verdict: draft.verdict,
       reason: draft.reason,
@@ -194,39 +268,18 @@ export async function pullWatch(watch: Watch): Promise<KnowledgePullOutcome> {
       .select("id");
     if (error) {
       outcome.error = error.message;
-      await recordPull({
-        watchId: String(watch.id),
-        hubId,
-        ok: false,
-        model: result.model,
-        found: result.found,
-        kept: 0,
-        xPostsFetched: result.xPostsFetched,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-        judgeTokens,
-        error: error.message,
-      });
+      await recordPull({ watchId: String(watch.id), hubId, ok: false, found: outcome.found, kept: 0, judgeTokens, error: error.message, ...usage });
       return outcome;
     }
     outcome.kept = (data ?? []).length;
   }
 
   outcome.ok = true;
-  await supabaseAdmin.from("knowledge_watches").update({ last_error: null }).eq("id", watch.id);
-  await recordPull({
-    watchId: String(watch.id),
-    hubId,
-    ok: true,
-    model: result.model,
-    found: result.found,
-    kept: outcome.kept,
-    xPostsFetched: result.xPostsFetched,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    judgeTokens,
-    error: null,
-  });
+  await supabaseAdmin
+    .from("knowledge_watches")
+    .update({ last_error: outcome.error?.slice(0, 300) ?? null })
+    .eq("id", watch.id);
+  await recordPull({ watchId: String(watch.id), hubId, ok: true, found: outcome.found, kept: outcome.kept, judgeTokens, error: outcome.error, ...usage });
   return outcome;
 }
 
@@ -240,7 +293,6 @@ export async function pullWatchById(id: string): Promise<KnowledgePullOutcome> {
 export async function runKnowledgePull(limit = 2): Promise<{ outcomes: KnowledgePullOutcome[]; note: string | null }> {
   const { error: schemaError } = await supabaseAdmin.from("knowledge_watches").select("id").limit(1);
   if (schemaError && isMissingSchemaError(schemaError)) return { outcomes: [], note: KNOWLEDGE_SCHEMA_HINT };
-  if (!process.env.XAI_API_KEY?.trim()) return { outcomes: [], note: "XAI_API_KEY is not configured" };
   const due = await loadDueWatches(limit);
   const settled = await Promise.allSettled(due.map((watch) => pullWatch(watch)));
   const outcomes = settled.map((entry, index) =>

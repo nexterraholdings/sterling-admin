@@ -10,6 +10,8 @@ export type HubLocale = {
   /** Human place name the props live in, e.g. "Tokyo, Japan". */
   place: string;
   source: "region" | "nearest" | "default";
+  lat: number | null;
+  lng: number | null;
 };
 
 const DEFAULT_LANGUAGE = "English";
@@ -48,6 +50,8 @@ function resolveLocale(hub: HubRow, override: { timezone: string | null; languag
     language: overrideLanguage || nearest?.language || DEFAULT_LANGUAGE,
     place,
     source: overrideZone || overrideLanguage ? "region" : nearest ? "nearest" : "default",
+    lat: Number.isFinite(Number(hub.center_lat)) && hub.center_lat !== null ? Number(hub.center_lat) : null,
+    lng: Number.isFinite(Number(hub.center_lng)) && hub.center_lng !== null ? Number(hub.center_lng) : null,
   };
 }
 

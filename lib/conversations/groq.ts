@@ -234,7 +234,7 @@ export async function writeConversationLine(input: {
     ? []
     : opensFromFact
       ? [
-          `Something real that happened in ${place || "this place"} today: ${fact.claim}${fact.author ? ` (from ${fact.author})` : ""}`,
+          `Something real going on in ${place || "this place"} right now: ${fact.claim}${fact.author ? ` (from ${fact.author})` : ""}`,
           "Write about this fact only. Mention only names, places, numbers, dates, and events that appear in it. Do not add prices, times, reasons, or details it does not give. React to it the way this person would.",
         ]
       : [

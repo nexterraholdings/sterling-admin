@@ -658,14 +658,6 @@ export async function rejectPlan(id: string, decidedBy: string): Promise<void> {
   if (error) throw new Error(isMissingSchemaError(error) ? DIRECTOR_SCHEMA_HINT : error.message);
 }
 
-type PlanApplier = (plan: DirectorPlan) => Promise<{ applied: number; dropped: DroppedAction[] }>;
-const appliers: Partial<Record<DirectorPlan["kind"], PlanApplier>> = {};
-
-/** Lets other planners (new groups) apply their own plan kinds through the same review flow. */
-export function registerPlanApplier(kind: DirectorPlan["kind"], applier: PlanApplier): void {
-  appliers[kind] = applier;
-}
-
 export async function applyPlan(id: string, decidedBy: string): Promise<DirectorPlan> {
   const plan = await loadPlan(id);
   if (!plan) throw new Error("plan_not_found");
@@ -675,9 +667,8 @@ export async function applyPlan(id: string, decidedBy: string): Promise<Director
     .update({ status: "approved", decided_by: decidedBy, decided_at: new Date().toISOString() })
     .eq("id", id);
   try {
-    const applier = plan.kind === "group" ? applyGroupPlan : appliers[plan.kind];
-    if (!applier) throw new Error(`No applier for ${plan.kind} plans`);
-    const result = await applier(plan);
+    const result =
+      plan.kind === "group" ? await applyGroupPlan(plan) : await (await import("@/lib/conversations/prop-groups")).applyNewGroupPlan(plan);
     await supabaseAdmin
       .from("prop_director_plans")
       .update({ status: "applied", applied_at: new Date().toISOString(), dropped: [...plan.dropped, ...result.dropped] })

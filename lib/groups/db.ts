@@ -906,6 +906,36 @@ export type CreateSystemGroupInput = {
  * eligible for public discovery. Admin-only: bypasses the per-user creation
  * cap and the "must be a hub participant" check real users go through. */
 export async function createSystemGroup(input: CreateSystemGroupInput): Promise<AdminGroupListItem> {
+  const id = await insertOwnedGroup(input, await getOrCreateSystemGroupOwner());
+  return getAdminGroupById(id);
+}
+
+/** Live groups this account owns anywhere. Free accounts may own one, so a prop that owns one cannot create another. */
+export async function countOwnedLiveGroups(userId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from("discussion_group_members")
+    .select("group_id, discussion_groups!inner(archived_at)")
+    .eq("user_id", userId)
+    .eq("role", "owner")
+    .is("discussion_groups.archived_at", null);
+  if (error) throwDbError(error, "Failed to count owned groups");
+  return (data ?? []).length;
+}
+
+/** A group owned by a prop account, which counts toward that account's ownership limit like any member's group. */
+export async function createPropGroup(input: CreateSystemGroupInput & { ownerId: string }): Promise<string> {
+  const { data: owner, error: ownerError } = await supabaseAdmin.from("profiles").select("id,email").eq("id", input.ownerId).maybeSingle();
+  if (ownerError) throwDbError(ownerError, "Failed to load owner");
+  if (!owner || !isPropAccountEmail(owner.email) || owner.email?.toLowerCase() === SYSTEM_GROUP_OWNER_EMAIL) {
+    throw new Error("The owner has to be a prop account");
+  }
+  if ((await countOwnedLiveGroups(input.ownerId)) > 0) throw new Error("That prop already owns a group");
+  const groupId = await insertOwnedGroup({ ...input, visibility: "public", avatar: null }, input.ownerId);
+  await addGroupMembers(groupId, [input.ownerId], "owner");
+  return groupId;
+}
+
+async function insertOwnedGroup(input: CreateSystemGroupInput, ownerId: string): Promise<string> {
   const title = input.title.trim();
   if (!title || title.length > 40) throw new Error("discussion_group_title_invalid");
 
@@ -918,7 +948,6 @@ export async function createSystemGroup(input: CreateSystemGroupInput): Promise<
   if (!hub) throw new Error("discussion_not_found");
   if (hub.origin !== "seeded") throw new Error("seeded_hub_required");
 
-  const ownerId = await getOrCreateSystemGroupOwner();
   const uniqueTitle = await uniqueGroupTitle(input.hubId, title);
   const categories = sanitizeCategories(input.categories);
   const visibility = sanitizeVisibility(input.visibility);
@@ -952,7 +981,7 @@ export async function createSystemGroup(input: CreateSystemGroupInput): Promise<
     if (avatarError) throwDbError(avatarError, "Group created, but the photo could not be saved");
   }
 
-  return getAdminGroupById(String(row.id));
+  return String(row.id);
 }
 
 export type UpdateSystemGroupInput = {

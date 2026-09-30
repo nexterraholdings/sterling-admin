@@ -7,6 +7,7 @@ import { EmptyState, FilterChip, formatRelativeTime, MetricPill } from "@/compon
 import type { DirectorDashboard, DirectorMode, DirectorPlan } from "@/lib/conversations/director";
 import {
   cancelJoinAction,
+  checkNewGroupsAction,
   decidePlanAction,
   planGroupNowAction,
   refreshDirector,
@@ -102,7 +103,8 @@ export function DirectorClient({ initial }: { initial: DirectorDashboard }) {
             <p className="mt-1 max-w-2xl text-sm text-zinc-400">
               For groups you hand over, the director reads the recent chat, each prop&apos;s persona and memories, and the approved facts,
               then decides who posts, replies, or likes over the next few hours. Code checks every action against the caps, active hours,
-              and membership before anything is queued. Props only reply to and like other props until the AI badge ships.
+              and membership before anything is queued. Props only reply to and like other props until the AI badge ships. Once a week per city it
+              may also propose a new group owned by a prop; those always wait for your approval, even in automatic mode.
             </p>
           </div>
           <button
@@ -215,7 +217,15 @@ export function DirectorClient({ initial }: { initial: DirectorDashboard }) {
       <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-zinc-50">Plans</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy !== null || !ready}
+              onClick={() => void run("new-group", checkNewGroupsAction, "Checked a city for a new group.")}
+              className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 disabled:opacity-50"
+            >
+              {busy === "new-group" ? "Checking…" : "Check for a new group"}
+            </button>
             {(["proposed", "applied", "all"] as PlanFilter[]).map((id) => (
               <FilterChip key={id} active={filter === id} onClick={() => setFilter(id)}>
                 {id === "proposed" ? "Waiting" : id === "applied" ? "Queued" : "All"}

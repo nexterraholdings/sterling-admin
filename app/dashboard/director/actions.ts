@@ -2,6 +2,7 @@
 
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import { OPERATOR_ROLES, requireAdmin } from "@/app/dashboard/lib/dal";
+import { runGroupProposals } from "@/lib/conversations/prop-groups";
 import { cancelJoin, saveCastingSettings, type CastingSettings } from "@/lib/conversations/casting";
 import {
   applyPlan,
@@ -94,5 +95,12 @@ export async function saveCastingSettingsAction(patch: Partial<Omit<CastingSetti
 export async function cancelJoinAction(id: string): Promise<DirectorDashboard> {
   await requireAdmin(OPERATOR_ROLES);
   await cancelJoin(id);
+  return loadDirectorDashboard();
+}
+
+export async function checkNewGroupsAction(): Promise<DirectorDashboard> {
+  await requireAdmin(OPERATOR_ROLES);
+  const planId = await runGroupProposals();
+  if (!planId) throw new Error("Every running city was checked for new groups in the last week.");
   return loadDirectorDashboard();
 }

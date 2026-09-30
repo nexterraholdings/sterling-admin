@@ -302,6 +302,11 @@ const WEATHER_GAP_MS = 20 * 60 * 60_000;
  * the group's least-used source over the last day goes first, and weather at most once a day.
  */
 export async function pickFactForGroup(hubId: string, groupId: string): Promise<KnowledgeFact | null> {
+  return (await listFactsForGroup(hubId, groupId, 1))[0] ?? null;
+}
+
+/** Same rotation as pickFactForGroup, best first. */
+export async function listFactsForGroup(hubId: string, groupId: string, limit: number): Promise<KnowledgeFact[]> {
   const now = Date.now();
   const { data, error } = await supabaseAdmin
     .from("knowledge_items")
@@ -312,10 +317,10 @@ export async function pickFactForGroup(hubId: string, groupId: string): Promise<
     .order("used_count", { ascending: true })
     .order("fetched_at", { ascending: false })
     .limit(60);
-  if (error && isMissingSchemaError(error)) return null;
+  if (error && isMissingSchemaError(error)) return [];
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as Array<{ id: string; claim: string; author: string | null; source: string; source_url: string }>;
-  if (rows.length === 0) return null;
+  if (rows.length === 0) return [];
 
   const [{ data: usedRows, error: usedError }, { data: recentRows, error: recentError }] = await Promise.all([
     supabaseAdmin
@@ -350,8 +355,13 @@ export async function pickFactForGroup(hubId: string, groupId: string): Promise<
     .map((row, rank) => ({ row, rank }))
     .filter(({ row }) => !used.has(String(row.id)) && !(weatherLocked && row.source === "weather"));
   candidates.sort((a, b) => (recentBySource.get(a.row.source) ?? 0) - (recentBySource.get(b.row.source) ?? 0) || a.rank - b.rank);
-  const pick = candidates[0]?.row;
-  return pick ? { id: String(pick.id), claim: pick.claim, author: String(pick.author ?? ""), sourceUrl: pick.source_url } : null;
+  return candidates.slice(0, limit).map(({ row }) => ({
+    id: String(row.id),
+    claim: row.claim,
+    author: String(row.author ?? ""),
+    sourceUrl: row.source_url,
+    source: row.source,
+  }));
 }
 
 export async function loadFact(id: string): Promise<KnowledgeFact | null> {

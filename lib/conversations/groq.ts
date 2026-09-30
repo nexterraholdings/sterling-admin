@@ -224,6 +224,8 @@ export async function writeConversationLine(input: {
   visitor?: { from: string; here: string } | null;
   /** What this prop established in earlier posts. */
   memories?: string[];
+  /** The director's one sentence on what this line should do. Direction, not wording. */
+  brief?: string;
 }): Promise<GroqLine> {
   const key = process.env.GROQ_API_KEY?.trim();
   if (!key) throw new GroqCallError("GROQ_API_KEY is not configured");
@@ -235,6 +237,7 @@ export async function writeConversationLine(input: {
   const character = input.character?.trim() ?? "";
   const subject = opensFromFact ? "" : input.subject?.trim() ?? "";
   const objective = input.objective?.trim() ?? "";
+  const brief = input.brief?.replace(/\s+/g, " ").trim() ?? "";
   const grammar = parseGrammar(input.grammar);
   const abbrev = parseAbbrev(input.abbrev);
   const allowSwearing = Boolean(input.swear);
@@ -304,6 +307,7 @@ export async function writeConversationLine(input: {
       `Topic: ${topicOrDefault(input.topic)}`,
       ...factLines,
       ...(subject ? [`What they bring up, in their own words: ${subject}`] : []),
+      ...(brief ? [`What they want to get across with this message: ${brief} Say it your own way. Do not copy this sentence.`] : []),
       ...styleNotes(grammar),
       swearing.instruction,
       ...(attitude ? [attitude] : []),

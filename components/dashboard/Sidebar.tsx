@@ -39,6 +39,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { href: "/dashboard/groups", label: "Groups", short: "GR", description: "Seed groups with prop members and content" },
       { href: "/dashboard/conversations", label: "Conversations", short: "CV", description: "AI prop posts and replies" },
       { href: "/dashboard/knowledge", label: "Knowledge", short: "KN", description: "Facts from X that feed prop posts" },
+      { href: "/dashboard/director", label: "Director", short: "DR", description: "One brain planning what the props do" },
       { href: "/dashboard/notifications", label: "Notifications", short: "NO", description: "Push and in-app messages" },
       { href: "/dashboard/blog", label: "Blog", short: "BL", description: "Company blog posts" },
     ],

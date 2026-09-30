@@ -93,6 +93,7 @@ export type KnowledgeFact = {
   claim: string;
   author: string;
   sourceUrl: string;
+  source?: string;
 };
 
 export type KnowledgePullOutcome = {

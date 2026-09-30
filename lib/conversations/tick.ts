@@ -21,7 +21,8 @@ import {
 } from "@/lib/conversations/time";
 import { loadGroupLocales, zoneFor, type HubLocale } from "@/lib/conversations/hub-locale";
 import { hubListsByProp, loadPropHomes, visitorFrom, writingLanguage, type PropHome } from "@/lib/conversations/prop-home";
-import { loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
+import { loadDirectorGroupIds, loadJobDirection } from "@/lib/conversations/director";
+import { loadFact, loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
 import type { KnowledgeFact } from "@/lib/knowledge/types";
 import { parseAbbrev, parseGrammar, parseRunRules, parseSwearRate, type SwearRate } from "@/lib/conversations/rules";
 import {
@@ -500,15 +501,19 @@ async function planJobs(
   const voices = await loadAccountVoices();
   const excludedByGroup = await loadExcludedByGroup();
   const pausedGroups = await loadPausedGroupIds();
+  const directorGroups = await loadDirectorGroupIds();
   for (const group of (groups ?? []) as EnabledGroup[]) {
     const groupId = String(group.group_id);
     if (pausedGroups.has(groupId)) continue;
+    const directed = directorGroups.has(groupId);
     const excluded = excludedByGroup.get(groupId);
     const memberIds = (members.get(groupId) ?? []).filter((id) => !excluded?.has(id));
     if (memberIds.length < 2) continue;
     const zone = zoneFor(locales, groupId);
     const since = startOfDayIn(zone);
-    if (parseWeekDays(group.week_days) > 0) {
+    if (directed) {
+      // The director plans this group's new posts.
+    } else if (parseWeekDays(group.week_days) > 0) {
       planned += await fillWeekForGroup(groupId, { zone });
     } else {
     if (openGroups && !openGroups.has(groupId)) continue;
@@ -598,7 +603,7 @@ async function planJobs(
       });
     }
 
-    if (parseWeekDays(group.week_days) === 0) {
+    if (!directed && parseWeekDays(group.week_days) === 0) {
       planned += await joinExistingThreads({
         groupId,
         memberIds,
@@ -1128,8 +1133,12 @@ export async function runConversationTick(options: {
     const thread = job.kind === "reply" && job.parent_comment_id ? await threadForReply(job.parent_comment_id, parentBody) : [];
 
     const locale = locales.get(job.group_id);
+    const direction = await loadJobDirection(job.id);
     let fact: KnowledgeFact | null = null;
-    if (job.kind === "start_post" && locale && watchedHubs.has(locale.hubId)) {
+    if (job.kind === "start_post" && direction?.knowledgeItemId) {
+      fact = await loadFact(direction.knowledgeItemId);
+    }
+    if (!fact && job.kind === "start_post" && locale && watchedHubs.has(locale.hubId)) {
       fact = await pickFactForGroup(locale.hubId, job.group_id);
       if (!fact) {
         await finishJob(job.id, {
@@ -1152,7 +1161,7 @@ export async function runConversationTick(options: {
     let line: Awaited<ReturnType<typeof writeConversationLine>>;
     try {
       const speaking = lineVoice(personas.get(job.author_id), group);
-      const moment = job.kind === "start_post" ? await loadRunMomentForJob(job.id) : null;
+      const moment = job.kind === "start_post" && !direction ? await loadRunMomentForJob(job.id) : null;
       const memories = await memoriesForLine(job.author_id, job.group_id).catch(() => [] as string[]);
       line = await writeConversationLine({
         topic: topicOrDefault(group.topic),
@@ -1177,6 +1186,7 @@ export async function runConversationTick(options: {
         fact,
         visitor: visitingFrom ? { from: visitingFrom, here: locale?.place ?? "" } : null,
         memories,
+        brief: direction?.brief || undefined,
       });
     } catch (error) {
       const groqError = error instanceof GroqCallError ? error : null;

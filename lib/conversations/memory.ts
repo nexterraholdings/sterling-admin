@@ -1,5 +1,5 @@
 import { GEMINI_LITE_MODEL, geminiConfigured, geminiJson } from "@/lib/ai/gemini";
-import { GROQ_MODEL } from "@/lib/conversations/groq";
+import { groqJson } from "@/lib/ai/groq-json";
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
 
@@ -209,7 +209,7 @@ async function rememberGroup(groupId: string, jobs: DoneJob[]): Promise<{ count:
 
   const reply = geminiConfigured()
     ? await geminiJson({ system, prompt, model: GEMINI_LITE_MODEL })
-    : await groqJson(system, prompt);
+    : await groqJson(system, prompt, { label: "memory" });
 
   const parsed = parseMemories(reply.text);
   const byNumber = new Map(people.map((id, index) => [index + 1, id]));
@@ -304,42 +304,4 @@ async function namesFor(ids: string[]): Promise<Map<string, string>> {
       row.full_name?.trim() || row.username?.trim() || "Member",
     ]),
   );
-}
-
-async function groqJson(system: string, prompt: string): Promise<{ text: string; model: string }> {
-  const key = process.env.GROQ_API_KEY?.trim();
-  if (!key) throw new Error("Set GEMINI_API_KEY or GROQ_API_KEY for prop memory");
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      temperature: 0.2,
-      max_tokens: 1200,
-      reasoning_effort: "low",
-      include_reasoning: false,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: prompt },
-      ],
-    }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  const payload = (await response.json().catch(() => null)) as {
-    error?: { message?: string };
-    model?: string;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-    choices?: Array<{ message?: { content?: string } }>;
-  } | null;
-  await supabaseAdmin.from("prop_groq_calls").insert({
-    job_id: null,
-    model: `${payload?.model || GROQ_MODEL} (memory)`,
-    ok: response.ok,
-    prompt_tokens: Number(payload?.usage?.prompt_tokens ?? 0),
-    completion_tokens: Number(payload?.usage?.completion_tokens ?? 0),
-    error: response.ok ? null : (payload?.error?.message ?? `Groq returned ${response.status}`).slice(0, 300),
-  });
-  if (!response.ok) throw new Error(payload?.error?.message || `Groq returned ${response.status}`);
-  return { text: payload?.choices?.[0]?.message?.content ?? "", model: payload?.model || GROQ_MODEL };
 }

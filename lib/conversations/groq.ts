@@ -1,5 +1,18 @@
-import { abbrevInstruction, grammarInstruction, parseAbbrev, parseGrammar, swearInstruction, type SwearRate } from "@/lib/conversations/rules";
-import { copiesSource, fixMechanics, rewriteRequest, robotTells, universalVoiceRules } from "@/lib/conversations/voice-guard";
+import {
+  abbrevInstruction,
+  attitudeInstruction,
+  grammarInstruction,
+  HARD_LIMITS,
+  parseAbbrev,
+  parseAttitude,
+  parseGrammar,
+  parseSwearStrength,
+  swearPlan,
+  type Attitude,
+  type SwearRate,
+  type SwearStrength,
+} from "@/lib/conversations/rules";
+import { copiesSource, fixMechanics, hardLimitTells, hasSwear, rewriteRequest, robotTells, universalVoiceRules } from "@/lib/conversations/voice-guard";
 
 export const GROQ_MODEL = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
 
@@ -197,6 +210,10 @@ export async function writeConversationLine(input: {
   thread?: string[];
   swear?: boolean;
   swearRate?: SwearRate;
+  swearStrength?: SwearStrength;
+  attitude?: Attitude;
+  /** Teen persona. Swearing stays mild and nothing sexual, whatever the run allows. */
+  minor?: boolean;
   grammar?: number;
   abbrev?: number;
   place?: string;
@@ -219,6 +236,10 @@ export async function writeConversationLine(input: {
   const grammar = parseGrammar(input.grammar);
   const abbrev = parseAbbrev(input.abbrev);
   const allowSwearing = Boolean(input.swear);
+  const minor = Boolean(input.minor);
+  const strength = minor ? "mild" : parseSwearStrength(input.swearStrength);
+  const attitude = attitudeInstruction(parseAttitude(input.attitude));
+  const swearing = swearPlan(allowSwearing, input.swearRate ?? "sometimes", strength);
   const thread = (input.thread ?? []).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 8);
   const place = input.place?.trim() ?? "";
   const language = input.language?.trim() ?? "";
@@ -275,7 +296,9 @@ export async function writeConversationLine(input: {
       ...factLines,
       ...(subject ? [`What they bring up, in their own words: ${subject}`] : []),
       ...styleNotes(grammar),
-      swearInstruction(allowSwearing, input.swearRate ?? "sometimes"),
+      swearing.instruction,
+      ...(attitude ? [attitude] : []),
+      HARD_LIMITS,
       ...(rules.length > 0
         ? [
             behavior
@@ -336,13 +359,19 @@ export async function writeConversationLine(input: {
     }
 
     clean = fixMechanics(cleanLine(messageText(payload?.choices?.[0]?.message?.content)));
-    const tells = robotTells(clean, !foreign, recent);
+    const hard = hardLimitTells(clean, { minor });
+    const tells = [...hard, ...robotTells(clean, !foreign, recent)];
     if (fact && copiesSource(clean, fact.claim)) tells.push("it reads like a pasted headline, react to it in your own words");
+    if (swearing.required && !foreign && attempt < MAX_ATTEMPTS - 1 && !hasSwear(clean, true)) {
+      tells.push("it has no cuss word, and this line needs one spelled out");
+    }
     const extra = fact && !foreign ? unsupportedDetails(clean, grounded) : [];
     if (tells.length === 0 && extra.length === 0) break;
     if (attempt === MAX_ATTEMPTS - 1) {
       throw new GroqCallError(
-        extra.length > 0
+        hard.length > 0
+          ? `Line broke a hard limit after ${MAX_ATTEMPTS} tries: ${hard.join(", ")}`
+          : extra.length > 0
           ? `Line added details that are not in the fact: ${extra.join(", ")}`
           : `Line still sounded like AI after ${MAX_ATTEMPTS} tries: ${tells.join(", ")}`,
         usage,

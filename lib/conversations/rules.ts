@@ -142,11 +142,67 @@ export function parseSwearRate(value: string | null | undefined): SwearRate {
   return "sometimes";
 }
 
-export function swearInstruction(enabled: boolean, rate: SwearRate): string {
-  if (!enabled) return "Do not swear.";
+export const SWEAR_STRENGTHS = [
+  { id: "mild", label: "Mild", hint: "damn, hell, shit, crap, ass" },
+  { id: "strong", label: "Strong", hint: "Adds fuck, bitch, asshole, dick, and the like" },
+  { id: "unfiltered", label: "Unfiltered", hint: "As crude and vulgar as the person would be" },
+] as const;
+
+export type SwearStrength = (typeof SWEAR_STRENGTHS)[number]["id"];
+
+export function parseSwearStrength(value: string | null | undefined): SwearStrength {
+  return value === "strong" || value === "unfiltered" ? value : "mild";
+}
+
+export const ATTITUDES = [
+  { id: "normal", label: "Normal", hint: "Ordinary neighbors" },
+  { id: "blunt", label: "Blunt", hint: "Strong opinions, trash talk, rude pushback" },
+  { id: "savage", label: "Savage", hint: "Roasts, sarcasm, dark humor" },
+] as const;
+
+export type Attitude = (typeof ATTITUDES)[number]["id"];
+
+export function parseAttitude(value: string | null | undefined): Attitude {
+  return value === "blunt" || value === "savage" ? value : "normal";
+}
+
+/** Lines no strength or attitude unlocks. Code enforces them too, in voice-guard. */
+export const HARD_LIMITS =
+  "Hard limits that nothing overrides: no slurs or hate aimed at any group of people, no threats, no telling anyone to hurt themselves, and nothing sexual about or from a minor.";
+
+/** `required` means the line must come back with a cuss word in it. */
+export function swearPlan(enabled: boolean, rate: SwearRate, strength: SwearStrength = "mild"): { instruction: string; required: boolean } {
+  if (!enabled) return { instruction: "Do not swear.", required: false };
   const odds = rate === "rare" ? 0.12 : rate === "often" ? 0.5 : 0.25;
-  if (Math.random() >= odds) return "Do not swear in this line.";
-  return "Include one mild cuss word in this line, the way a person texts. Use damn, hell, shit, crap, or ass. No slurs and no threats.";
+  if (Math.random() >= odds) return { instruction: "Do not swear in this line.", required: false };
+  if (strength === "strong") {
+    return {
+      instruction:
+        "Put at least one real cuss word in this line, spelled out, like fuck, fucking, shit, bullshit, bitch, asshole, or dick. Aim it at the situation or say it jokingly to someone. wtf alone does not count.",
+      required: true,
+    };
+  }
+  if (strength === "unfiltered") {
+    return {
+      instruction:
+        "Swear hard in this line, spelled out and uncensored, like fuck, fucking, shit, bitch, asshole, or dickhead, as crude and vulgar as this person would be. wtf alone does not count.",
+      required: true,
+    };
+  }
+  return {
+    instruction: "Include one mild cuss word in this line, the way a person texts. Use damn, hell, shit, crap, or ass.",
+    required: false,
+  };
+}
+
+export function attitudeInstruction(attitude: Attitude): string | null {
+  if (attitude === "blunt") {
+    return "Attitude: blunt. Say what they really think. Trash talk places, teams, traffic, and bad ideas. Push back rudely when they disagree. Do not be nice for the sake of it.";
+  }
+  if (attitude === "savage") {
+    return "Attitude: savage. Roast people and things, be sarcastic, and dark humor is fine. Clown on a bad take. Never soften a joke.";
+  }
+  return null;
 }
 
 export function serializeRunRules(rules: string[]): string {

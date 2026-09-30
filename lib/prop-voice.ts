@@ -299,12 +299,22 @@ function talkInstruction(talk: TalkStyle): string {
   return "Length: one or two ordinary sentences.";
 }
 
+const TEEN_TEXT = /\b(high ?school|teen(?:ager)?|hoco|homecoming|freshman|sophomore|middle school|(?:6|7|8|9|10|11|12)th grade|my (?:mom|parents) (?:won'?t|wont|said))\b/i;
+
+/** Under 18, or no age set and the persona reads as a teenager. */
+export function isMinorVoice(voice: PropVoice | null | undefined): boolean {
+  if (!voice) return false;
+  if (voice.traits.age != null) return voice.traits.age < 18;
+  return TEEN_TEXT.test(`${voice.personality} ${voice.behavior} ${voice.traits.interests}`);
+}
+
 export function lineVoice(
   account: PropVoice | null | undefined,
   group: { swear: boolean; swearRate: SwearRate; grammar: number; abbrev: number },
-): { personality: string; behavior: string; character: string; swear: boolean; swearRate: SwearRate; grammar: number; abbrev: number } {
+): { personality: string; behavior: string; character: string; swear: boolean; swearRate: SwearRate; grammar: number; abbrev: number; minor: boolean } {
   const voice = account ?? EMPTY_PROP_VOICE;
   return {
+    minor: isMinorVoice(account),
     personality: voice.personality,
     behavior: voice.behavior,
     character: characterNotes(voice),

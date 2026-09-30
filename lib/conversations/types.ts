@@ -1,3 +1,4 @@
+import type { RunEdge } from "@/lib/conversations/edge";
 import type { PropTraits } from "@/lib/prop-voice";
 
 export type ConversationSettings = {
@@ -39,6 +40,7 @@ export type ConversationGroup = {
   rules: string[];
   swear: boolean;
   swearRate: "rare" | "sometimes" | "often";
+  edge: RunEdge;
   grammar: number;
   abbrev: number;
   weekDays: number;
@@ -139,6 +141,7 @@ export type ConversationActiveRun = {
   rules: string[];
   swear: boolean;
   swearRate: "rare" | "sometimes" | "often";
+  edge: RunEdge;
   grammar: number;
   abbrev: number;
   weekDays: number;

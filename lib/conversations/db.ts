@@ -1,5 +1,6 @@
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { DEFAULT_EDGE, loadRunEdges } from "@/lib/conversations/edge";
 import { deleteGroupContent } from "@/lib/groups/db";
 import { isPropAccountEmail, PROP_ACCOUNT_EMAIL_PATTERN, SYSTEM_GROUP_OWNER_EMAIL } from "@/lib/prop-accounts";
 import { loadAccountVoice, loadAccountVoices, saveAccountVoice, writeAccountVoices } from "@/lib/prop-voice-store";
@@ -147,7 +148,7 @@ export async function loadConversationUsage(since = startOfNyDay()): Promise<Con
 
 export async function loadConversationDashboard(): Promise<ConversationDashboard> {
   const since = startOfNyDay();
-  const [settings, usage, props, openGroups, configResult, personaResult, folderResult, folderMemberResult, logResult, queueResult, openJobResult, todayJobResult, finishedJobResult] =
+  const [settings, usage, props, openGroups, configResult, personaResult, folderResult, folderMemberResult, logResult, queueResult, openJobResult, todayJobResult, finishedJobResult, edges] =
     await Promise.all([
     loadConversationSettings(),
     loadConversationUsage(since),
@@ -189,6 +190,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
       .in("status", ["done", "failed", "skipped"])
       .order("finished_at", { ascending: false })
       .limit(200),
+    loadRunEdges(),
   ]);
 
   if (configResult.error) throw new Error(configResult.error.message);
@@ -313,6 +315,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
       rules: config?.rules ?? parseRunRules(null),
       swear: config?.swear ?? false,
       swearRate: config?.swearRate ?? "sometimes",
+      edge: edges.get(id) ?? DEFAULT_EDGE,
       grammar: config?.grammar ?? DEFAULT_GRAMMAR,
       abbrev: config?.abbrev ?? 0,
       weekDays: config?.weekDays ?? 0,
@@ -557,6 +560,7 @@ function buildActiveRuns(
       rules: group?.rules ?? parseRunRules(null),
       swear: group?.swear ?? false,
       swearRate: group?.swearRate ?? "sometimes",
+      edge: group?.edge ?? DEFAULT_EDGE,
       grammar: group?.grammar ?? DEFAULT_GRAMMAR,
       abbrev: group?.abbrev ?? 0,
       weekDays: group?.weekDays ?? 0,
@@ -596,6 +600,7 @@ function emptySnapshot(group: ConversationGroup): ConversationActiveRun {
     rules: group.rules,
     swear: group.swear,
     swearRate: group.swearRate,
+    edge: group.edge,
     grammar: group.grammar,
     abbrev: group.abbrev,
     weekDays: group.weekDays,
@@ -1103,11 +1108,13 @@ export async function previewGroupLine(groupId: string, userId: string): Promise
   const members = await loadPropMemberIdsByGroup();
   if (!(members.get(groupId) ?? []).includes(userId)) throw new Error("That account is not in this group.");
 
-  const [{ data: config, error: configError }, voice, locales] = await Promise.all([
+  const [{ data: config, error: configError }, voice, locales, edges] = await Promise.all([
     supabaseAdmin.from("prop_conversation_groups").select("topic, rules, swear, swear_rate, grammar, abbrev").eq("group_id", groupId).maybeSingle(),
     loadAccountVoice(userId),
     loadGroupLocales([groupId]),
+    loadRunEdges([groupId]),
   ]);
+  const edge = edges.get(groupId) ?? DEFAULT_EDGE;
   if (configError) throw new Error(configError.message);
   const speaking = lineVoice(voice, {
     swear: Boolean(config?.swear),
@@ -1127,6 +1134,9 @@ export async function previewGroupLine(groupId: string, userId: string): Promise
       rules: parseRunRules(config?.rules),
       swear: speaking.swear,
       swearRate: speaking.swearRate,
+      swearStrength: edge.swearStrength,
+      attitude: edge.attitude,
+      minor: speaking.minor,
       grammar: speaking.grammar,
       abbrev: speaking.abbrev,
       language: locales.get(groupId)?.language,

@@ -31,6 +31,7 @@ import {
 import { addPostsForToday, fillWeekForGroup, runConversationTick } from "@/lib/conversations/tick";
 import { saveRegionLocale, saveRegionObjective, setAccountExcluded, setRunPaused } from "@/lib/conversations/region-runs";
 import { savePropHome } from "@/lib/conversations/prop-home";
+import { saveRunEdge, type RunEdge } from "@/lib/conversations/edge";
 import { parseWeekDays } from "@/lib/conversations/week";
 import type { SwearRate } from "@/lib/conversations/rules";
 import type { PropVoice } from "@/lib/prop-voice";
@@ -196,9 +197,17 @@ export async function saveRegionGrammar(groupIds: string[], grammar: number): Pr
   return forIncludedGroups(groupIds, (groupId) => saveRunGrammar(groupId, grammar));
 }
 
-export async function saveRegionSwear(groupIds: string[], swear: boolean, swearRate: SwearRate): Promise<ConversationDashboard> {
+export async function saveRegionSwear(
+  groupIds: string[],
+  swear: boolean,
+  swearRate: SwearRate,
+  edge?: RunEdge,
+): Promise<ConversationDashboard> {
   await requireAdmin(OPERATOR_ROLES);
-  return forIncludedGroups(groupIds, (groupId) => saveRunSwear(groupId, swear, swearRate));
+  return forIncludedGroups(groupIds, async (groupId) => {
+    await saveRunSwear(groupId, swear, swearRate);
+    if (edge) await saveRunEdge(groupId, edge);
+  });
 }
 
 export async function saveRegionRules(groupIds: string[], rules: string[]): Promise<ConversationDashboard> {

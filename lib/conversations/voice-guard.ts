@@ -148,6 +148,33 @@ export function robotTells(text: string, english: boolean, recent: string[] = []
   return found;
 }
 
+const SLURS =
+  /(?<![\p{L}])(n[i1!]gg(?:a|er|ah|as|ers|uh)s?|f[a@]gg?(?:ot|ots|s)?|dykes?|retard(?:s|ed)?|tr[a@]nn(?:y|ies)|sh[e3]m[a@]les?|k[i1]kes?|sp[i1]cs?|ch[i1]nks?|g[o0]{2}ks?|wetbacks?|beaners?|towelheads?|raghe[a@]ds?|sand ?n[i1]gg\w*|coons?|jungle ?bunn(?:y|ies)|gypp?(?:y|ies)|paki(?:s)?|wogs?|golliwogs?)(?![\p{L}])/iu;
+const THREATS =
+  /\b(kill (?:yo)?urself|kys|(?:i(?:'?ll| will| am gonna|m gonna| gonna)|we(?:'?ll| will| gonna)) (?:kill|shoot|stab|murder) (?:you|u|ya|him|her|them)|hope (?:you|u) (?:die|get (?:shot|killed|hit))|(?:go )?die in a fire)\b/i;
+const STRONG_SWEARS = /(?<![\p{L}])(f+u+c+k\w*|fk|fck\w*|motherf\w*|bitch\w*|asshole\w*|dick(?:s|head|heads)?|cunt\w*|pussy|cock(?:s|y)?|whore\w*|slut\w*|twat\w*|bastard\w*)(?![\p{L}])/iu;
+const SEXUAL =
+  /(?<![\p{L}])(sex\w*|horny|naked|nudes?|porn\w*|boobs?|tits?|titties|hook(?:ing)? up|hooked up|make out|making out|thicc|dtf|cum(?:ming)?|orgasm\w*|blowjob\w*|bj)(?![\p{L}])/iu;
+
+const ANY_SWEAR = /(?<![\p{L}])(shit\w*|bullshit|damn\w*|hell|crap\w*|ass|asses|dumbass\w*|jackass\w*|pissed|piss\w*)(?![\p{L}])/iu;
+
+export function hasSwear(text: string, strong = false): boolean {
+  if (STRONG_SWEARS.test(text) || /(?<![\p{L}])(shit\w*|bullshit)(?![\p{L}])/iu.test(text)) return true;
+  return !strong && ANY_SWEAR.test(text);
+}
+
+/** Lines no setting unlocks. Any hit means the line is rewritten or dropped, never posted. */
+export function hardLimitTells(text: string, options: { minor: boolean }): string[] {
+  const found: string[] = [];
+  if (SLURS.test(text)) found.push("a slur, which is never allowed");
+  if (THREATS.test(text)) found.push("a threat, which is never allowed");
+  if (options.minor) {
+    if (STRONG_SWEARS.test(text)) found.push("strong swearing from a teenager, keep it to mild words like damn or crap");
+    if (SEXUAL.test(text)) found.push("sexual content from a teenager, which is never allowed");
+  }
+  return found;
+}
+
 /** True when nearly every word of the line comes straight from the source, like a pasted headline. */
 export function copiesSource(line: string, source: string): boolean {
   const words = (value: string) => value.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];

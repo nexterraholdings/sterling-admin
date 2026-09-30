@@ -38,7 +38,23 @@ import {
   updateSentLine,
 } from "@/app/dashboard/conversations/actions";
 import { hourIn, nyDateKey, withinActiveHours } from "@/lib/conversations/time";
-import { abbrevHint, abbrevLabel, editableRunRules, forbidsHyphens, grammarHint, grammarLabel, serializeRunRules, SWEAR_RATES, withNoHyphenRule, type SwearRate } from "@/lib/conversations/rules";
+import {
+  abbrevHint,
+  abbrevLabel,
+  ATTITUDES,
+  editableRunRules,
+  forbidsHyphens,
+  grammarHint,
+  grammarLabel,
+  serializeRunRules,
+  SWEAR_RATES,
+  SWEAR_STRENGTHS,
+  withNoHyphenRule,
+  type Attitude,
+  type SwearRate,
+  type SwearStrength,
+} from "@/lib/conversations/rules";
+import type { RunEdge } from "@/lib/conversations/edge";
 import { describeWeek, postsInWindow } from "@/lib/conversations/week";
 import { TOPIC_DIRECTIONS } from "@/lib/conversations/types";
 import { samePropVoice, voiceIsSet, type PropVoice } from "@/lib/prop-voice";
@@ -389,8 +405,8 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
             void run("auto:region", () => setRegionAutomatic(groupIds, automatic, postsPerDay))
           }
           onSaveRules={(groupIds, rules) => void run("rules:region", () => saveRegionRules(groupIds, rules))}
-          onSaveSwear={(groupIds, swear, swearRate) =>
-            void run("swear:region", () => saveRegionSwear(groupIds, swear, swearRate))
+          onSaveSwear={(groupIds, swear, swearRate, edge) =>
+            void run("swear:region", () => saveRegionSwear(groupIds, swear, swearRate, edge))
           }
           onSaveGrammar={(groupIds, grammar) => void run("grammar:region", () => saveRegionGrammar(groupIds, grammar))}
           onSaveAbbrev={(groupIds, abbrev) => void run("abbrev:region", () => saveRegionAbbrev(groupIds, abbrev))}
@@ -661,7 +677,7 @@ function ActiveRuns({
   onDeleteLine: (jobId: string) => void;
   onSetAutomatic: (groupIds: string[], automatic: boolean, postsPerDay: number) => void;
   onSaveRules: (groupIds: string[], rules: string[]) => void;
-  onSaveSwear: (groupIds: string[], swear: boolean, swearRate: SwearRate) => void;
+  onSaveSwear: (groupIds: string[], swear: boolean, swearRate: SwearRate, edge: RunEdge) => void;
   onSaveGrammar: (groupIds: string[], grammar: number) => void;
   onSaveAbbrev: (groupIds: string[], abbrev: number) => void;
   onSaveWeek: (groupIds: string[], input: { days: number; startHour: number; endHour: number; everyMinutes: number; callsPerDay: number }) => void;
@@ -981,7 +997,7 @@ function RunScreen({
   onDeleteLine: (jobId: string) => void;
   onSetAutomatic: (groupIds: string[], automatic: boolean, postsPerDay: number) => void;
   onSaveRules: (groupIds: string[], rules: string[]) => void;
-  onSaveSwear: (groupIds: string[], swear: boolean, swearRate: SwearRate) => void;
+  onSaveSwear: (groupIds: string[], swear: boolean, swearRate: SwearRate, edge: RunEdge) => void;
   onSaveGrammar: (groupIds: string[], grammar: number) => void;
   onSaveAbbrev: (groupIds: string[], abbrev: number) => void;
   onSaveWeek: (groupIds: string[], input: { days: number; startHour: number; endHour: number; everyMinutes: number; callsPerDay: number }) => void;
@@ -1006,6 +1022,8 @@ function RunScreen({
   const [advanced, setAdvanced] = useState(false);
   const [swear, setSwear] = useState(run.swear);
   const [swearRate, setSwearRate] = useState<SwearRate>(run.swearRate);
+  const [strength, setStrength] = useState<SwearStrength>(run.edge.swearStrength);
+  const [attitude, setAttitude] = useState<Attitude>(run.edge.attitude);
   const [grammar, setGrammar] = useState(run.grammar);
   const [abbrev, setAbbrev] = useState(run.abbrev);
   const [weekOn, setWeekOn] = useState(run.weekDays > 0);
@@ -1059,7 +1077,9 @@ function RunScreen({
   useEffect(() => {
     setSwear(run.swear);
     setSwearRate(run.swearRate);
-  }, [run.groupId, run.swear, run.swearRate]);
+    setStrength(run.edge.swearStrength);
+    setAttitude(run.edge.attitude);
+  }, [run.groupId, run.swear, run.swearRate, run.edge.swearStrength, run.edge.attitude]);
 
   useEffect(() => {
     setGrammar(run.grammar);
@@ -2171,7 +2191,7 @@ function RunScreen({
                     <span>
                       <span className="block text-sm font-semibold text-zinc-50">Advanced options</span>
                       <span className="mt-1 block text-xs text-zinc-500">
-                        {run.swear ? `Cuss words ${SWEAR_RATES.find((item) => item.id === run.swearRate)?.label.toLowerCase()}` : "Cuss words off"}
+                        {run.swear ? `Cuss words ${SWEAR_RATES.find((item) => item.id === run.swearRate)?.label.toLowerCase()}, ${run.edge.swearStrength}` : "Cuss words off"}{run.edge.attitude !== "normal" ? `. Attitude ${run.edge.attitude}` : ""}
                       </span>
                     </span>
                     <span className="text-xs text-cyan-200">{advanced ? "Hide" : "Show"}</span>
@@ -2182,7 +2202,7 @@ function RunScreen({
                         <div>
                           <p className="text-sm text-zinc-100">Cuss words</p>
                           <p className="text-xs text-zinc-500">
-                            {swear ? "A mild cuss word, on some new lines. No slurs." : "New lines stay clean."}
+                            {swear ? "Cuss words on some new lines, at the strength below." : "New lines stay clean."}
                           </p>
                         </div>
                         <button
@@ -2216,12 +2236,56 @@ function RunScreen({
                             ))}
                           </div>
                           <p className="mt-2 text-xs text-zinc-500">{SWEAR_RATES.find((item) => item.id === swearRate)?.hint}</p>
+                          <p className="mt-4 text-xs text-zinc-500">Strength</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {SWEAR_STRENGTHS.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                disabled={busy}
+                                onClick={() => setStrength(item.id)}
+                                className={`rounded-xl border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                                  strength === item.id ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-zinc-700 text-zinc-300"
+                                }`}
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-xs text-zinc-500">{SWEAR_STRENGTHS.find((item) => item.id === strength)?.hint}</p>
                         </div>
                       ) : null}
+                      <p className="mt-5 text-sm text-zinc-100">Attitude</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {ATTITUDES.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setAttitude(item.id)}
+                            className={`rounded-xl border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                              attitude === item.id ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-zinc-700 text-zinc-300"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-xs text-zinc-500">{ATTITUDES.find((item) => item.id === attitude)?.hint}</p>
+                      <p className="mt-4 text-xs text-zinc-500">
+                        Never allowed at any setting: slurs, hate aimed at a group, threats, or telling someone to hurt themselves. Accounts under 18
+                        stay at mild cuss words and never say anything sexual.
+                      </p>
                       <button
                         type="button"
-                        disabled={busy || (swear === run.swear && swearRate === run.swearRate)}
-                        onClick={() => onSaveSwear(includedIds, swear, swearRate)}
+                        disabled={
+                          busy ||
+                          (swear === run.swear &&
+                            swearRate === run.swearRate &&
+                            strength === run.edge.swearStrength &&
+                            attitude === run.edge.attitude)
+                        }
+                        onClick={() => onSaveSwear(includedIds, swear, swearRate, { swearStrength: strength, attitude })}
                         className="mt-4 rounded-xl border border-cyan-400/30 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50"
                       >
                         Save

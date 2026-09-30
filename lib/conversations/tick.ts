@@ -1,4 +1,5 @@
 import { publishGroupContent } from "@/lib/groups/db";
+import { DEFAULT_EDGE, loadRunEdges } from "@/lib/conversations/edge";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { clearFutureStartPosts, loadConversationSettings, loadConversationUsage, loadPropMemberIdsByGroup } from "@/lib/conversations/db";
 import { loadAccountVoices } from "@/lib/prop-voice-store";
@@ -1019,6 +1020,7 @@ export async function runConversationTick(options: {
   const excludedByGroup = await loadExcludedByGroup();
   const pausedGroups = !onlyJob && !run ? [...(await loadPausedGroupIds())] : [];
   const watchedHubs = await loadWatchedHubIds();
+  const edges = await loadRunEdges([...topics.keys()]);
 
   const deferred = new Set<string>();
   let executed = 0;
@@ -1159,6 +1161,9 @@ export async function runConversationTick(options: {
         thread,
         swear: speaking.swear,
         swearRate: speaking.swearRate,
+        swearStrength: (edges.get(job.group_id) ?? DEFAULT_EDGE).swearStrength,
+        attitude: (edges.get(job.group_id) ?? DEFAULT_EDGE).attitude,
+        minor: speaking.minor,
         grammar: speaking.grammar,
         abbrev: speaking.abbrev,
         place: fact ? locale?.place : undefined,

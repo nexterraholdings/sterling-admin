@@ -2109,19 +2109,14 @@ function RunScreen({
                 <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
                   <h3 className="text-sm font-semibold text-zinc-50">Rules</h3>
                   <p className="mt-1 text-xs text-zinc-500">The model follows these on every new line in this run.</p>
-                  <label className="mt-4 flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={noHyphens}
-                      disabled={busy}
-                      onChange={(event) => setNoHyphens(event.target.checked)}
-                      className="mt-0.5 h-4 w-4 shrink-0 accent-cyan-400 disabled:opacity-50"
-                    />
-                    <span>
-                      <span className="block text-sm text-zinc-100">Never allow hyphens</span>
-                      <span className="block text-xs text-zinc-500">New lines use a space or a period instead of a hyphen or dash.</span>
-                    </span>
-                  </label>
+                  <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+                    <p className="text-sm text-zinc-100">Universal rules, always on for every account</p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      No hyphens or dashes, no semicolons, lists, or hashtags, one emoji and one exclamation mark at most, and no AI or marketing
+                      phrasing. Lines that break them are fixed or rewritten before they post, and dropped after three tries. They override
+                      the rules below.
+                    </p>
+                  </div>
                   <div className="mt-4 flex flex-col gap-2">
                     {rules.map((rule, index) => (
                       <div key={index} className="flex items-start gap-2">

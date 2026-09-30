@@ -1,6 +1,9 @@
-import { abbrevInstruction, forbidsHyphens, grammarInstruction, parseAbbrev, parseGrammar, stripHyphens, swearInstruction, type SwearRate } from "@/lib/conversations/rules";
+import { abbrevInstruction, grammarInstruction, parseAbbrev, parseGrammar, swearInstruction, type SwearRate } from "@/lib/conversations/rules";
+import { copiesSource, fixMechanics, rewriteRequest, robotTells, universalVoiceRules } from "@/lib/conversations/voice-guard";
 
 export const GROQ_MODEL = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
+
+const MAX_ATTEMPTS = 3;
 
 const DEFAULT_PERSONALITY =
   "Casual neighbor. Short, specific, and a little informal. Sound like a person texting, not a brand.";
@@ -250,6 +253,7 @@ export async function writeConversationLine(input: {
       place
         ? `You write one short message for a local group chat in ${place}, like a text from a real neighbor who lives there.`
         : "You write one short message for a local group chat, like a text from a real neighbor.",
+      ...universalVoiceRules(!foreign),
       ...(foreign
         ? [`Write the message in ${language}, the way people there actually text. The grammar and abbreviation levels apply in ${language}.`]
         : []),
@@ -275,22 +279,20 @@ export async function writeConversationLine(input: {
       ...(rules.length > 0
         ? [
             behavior
-              ? "Follow every rule below. A rule wins when it conflicts with the style notes above, except the grammar level, the abbreviation level, and this person's own behavior."
-              : "Follow every rule below. A rule wins when it conflicts with the style notes above, except the grammar level and the abbreviation level.",
+              ? "Follow every rule below. A rule wins when it conflicts with the style notes above, except the universal rules, the grammar level, the abbreviation level, and this person's own behavior."
+              : "Follow every rule below. A rule wins when it conflicts with the style notes above, except the universal rules, the grammar level, and the abbreviation level.",
             ...rules.map((rule) => `- ${rule}`),
           ]
         : []),
       `Grammar level: ${grammarInstruction(grammar)} This grammar level wins over any rule about spelling, typos, or polish.`,
       `Abbreviation level: ${abbrevInstruction(abbrev, allowSwearing)} This abbreviation level wins over any rule about spelling those phrases out.`,
-      ...(forbidsHyphens(rules)
-        ? ["Never use a hyphen or a dash anywhere in this line, including compound words. Use a space or a period. This wins over the grammar level."]
-        : []),
       ...(behavior
         ? [
             "This person's own behavior controls how they write. Follow it on this line. It wins over the run rules when they conflict.",
             behavior,
           ]
         : []),
+      "Before you answer, check the universal rules at the top again. Nothing above overrides them: no hyphens or dashes, no AI or marketing voice, just a real person typing.",
     ].join("\n"),
   };
 
@@ -299,8 +301,9 @@ export async function writeConversationLine(input: {
   const grounded = fact
     ? [fact.claim, fact.author, place, input.visitor?.from ?? "", input.visitor?.here ?? "", input.parentBody ?? "", ...thread].join(" ")
     : "";
+  const recent = [...new Set([...thread, input.parentBody ?? ""].filter(Boolean))];
   let clean = "";
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -332,24 +335,33 @@ export async function writeConversationLine(input: {
       throw new GroqCallError(payload?.error?.message || `Groq returned ${response.status}`, usage);
     }
 
-    clean = cleanLine(messageText(payload?.choices?.[0]?.message?.content));
-    if (!fact || foreign) break;
-    const extra = unsupportedDetails(clean, grounded);
-    if (extra.length === 0) break;
-    if (attempt === 1) {
-      throw new GroqCallError(`Line added details that are not in the fact: ${extra.join(", ")}`, usage);
+    clean = fixMechanics(cleanLine(messageText(payload?.choices?.[0]?.message?.content)));
+    const tells = robotTells(clean, !foreign, recent);
+    if (fact && copiesSource(clean, fact.claim)) tells.push("it reads like a pasted headline, react to it in your own words");
+    const extra = fact && !foreign ? unsupportedDetails(clean, grounded) : [];
+    if (tells.length === 0 && extra.length === 0) break;
+    if (attempt === MAX_ATTEMPTS - 1) {
+      throw new GroqCallError(
+        extra.length > 0
+          ? `Line added details that are not in the fact: ${extra.join(", ")}`
+          : `Line still sounded like AI after ${MAX_ATTEMPTS} tries: ${tells.join(", ")}`,
+        usage,
+      );
     }
     messages.push(
       { role: "assistant", content: clean },
       {
         role: "user",
-        content: `That added ${extra.join(", ")}, which the fact does not say. Write it again using only what the fact says.`,
+        content: [
+          ...(extra.length > 0 ? [`That added ${extra.join(", ")}, which the fact does not say. Use only what the fact says.`] : []),
+          ...(tells.length > 0 ? [rewriteRequest(tells)] : []),
+          ...(extra.length > 0 && tells.length === 0 ? ["Write it again."] : []),
+        ].join(" "),
       },
     );
   }
 
-  const drafted = roughenLine(clean, grammar);
-  const text = forbidsHyphens(rules) ? stripHyphens(drafted) : drafted;
+  const text = fixMechanics(roughenLine(clean, grammar));
   if (text.length < 2) throw new GroqCallError("Groq returned an empty line", usage);
   const prior = new Set(
     [input.parentBody ?? "", ...thread].map((line) => line.trim().toLowerCase()).filter(Boolean),

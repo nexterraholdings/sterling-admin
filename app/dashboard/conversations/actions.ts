@@ -32,6 +32,7 @@ import { addPostsForToday, fillWeekForGroup, runConversationTick } from "@/lib/c
 import { saveRegionLocale, saveRegionObjective, setAccountExcluded, setRunPaused } from "@/lib/conversations/region-runs";
 import { savePropHome } from "@/lib/conversations/prop-home";
 import { saveRunEdge, type RunEdge } from "@/lib/conversations/edge";
+import { deletePropMemory, listPropMemories, type PropMemory } from "@/lib/conversations/memory";
 import { parseWeekDays } from "@/lib/conversations/week";
 import type { SwearRate } from "@/lib/conversations/rules";
 import type { PropVoice } from "@/lib/prop-voice";
@@ -395,4 +396,15 @@ export async function runConversationsOnce(
   const tick = await runConversationTick({ manual: true, run: input });
   const dashboard = await loadConversationDashboard();
   return { dashboard, tick };
+}
+
+export async function loadPropMemoriesAction(userId: string): Promise<PropMemory[]> {
+  await requireAdmin(OPERATOR_ROLES);
+  return listPropMemories(userId);
+}
+
+export async function deletePropMemoryAction(id: string, userId: string): Promise<PropMemory[]> {
+  await requireAdmin(OPERATOR_ROLES);
+  await deletePropMemory(id);
+  return listPropMemories(userId);
 }

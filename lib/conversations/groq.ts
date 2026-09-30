@@ -222,6 +222,8 @@ export async function writeConversationLine(input: {
   fact?: { claim: string; author: string } | null;
   /** Set when this prop lives far from the group's hub. */
   visitor?: { from: string; here: string } | null;
+  /** What this prop established in earlier posts. */
+  memories?: string[];
 }): Promise<GroqLine> {
   const key = process.env.GROQ_API_KEY?.trim();
   if (!key) throw new GroqCallError("GROQ_API_KEY is not configured");
@@ -241,6 +243,7 @@ export async function writeConversationLine(input: {
   const attitude = attitudeInstruction(parseAttitude(input.attitude));
   const swearing = swearPlan(allowSwearing, input.swearRate ?? "sometimes", strength);
   const thread = (input.thread ?? []).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 8);
+  const memories = (input.memories ?? []).map((memory) => memory.trim()).filter(Boolean).slice(0, 10);
   const place = input.place?.trim() ?? "";
   const language = input.language?.trim() ?? "";
   const foreign = Boolean(language) && language.toLowerCase() !== "english";
@@ -292,6 +295,12 @@ export async function writeConversationLine(input: {
             "These traits decide what they care about and how they phrase it. The grammar level and the abbreviation level still control typos and shortened words.",
           ]
         : []),
+      ...(memories.length > 0
+        ? [
+            "What this person already said in earlier posts. Stay consistent with it and never contradict it. Bring one up only when it fits naturally, like a real person would:",
+            ...memories.map((memory) => `- ${memory}`),
+          ]
+        : []),
       `Topic: ${topicOrDefault(input.topic)}`,
       ...factLines,
       ...(subject ? [`What they bring up, in their own words: ${subject}`] : []),
@@ -322,7 +331,7 @@ export async function writeConversationLine(input: {
   const usage = { promptTokens: 0, completionTokens: 0, model: GROQ_MODEL };
   const messages: Array<{ role: string; content: string }> = [system, { role: "user", content: task }];
   const grounded = fact
-    ? [fact.claim, fact.author, place, input.visitor?.from ?? "", input.visitor?.here ?? "", input.parentBody ?? "", ...thread].join(" ")
+    ? [fact.claim, fact.author, place, input.visitor?.from ?? "", input.visitor?.here ?? "", input.parentBody ?? "", ...thread, ...memories].join(" ")
     : "";
   const recent = [...new Set([...thread, input.parentBody ?? ""].filter(Boolean))];
   let clean = "";

@@ -1,5 +1,6 @@
 import { publishGroupContent } from "@/lib/groups/db";
 import { DEFAULT_EDGE, loadRunEdges } from "@/lib/conversations/edge";
+import { memoriesForLine, rememberRecentLines } from "@/lib/conversations/memory";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { clearFutureStartPosts, loadConversationSettings, loadConversationUsage, loadPropMemberIdsByGroup } from "@/lib/conversations/db";
 import { loadAccountVoices } from "@/lib/prop-voice-store";
@@ -894,11 +895,15 @@ async function loadHomes(members: Map<string, string[]>): Promise<Map<string, Pr
   return loadPropHomes(hubListsByProp(members, locales));
 }
 
+/** Skip the memory pass once the tick has used this much of its 60 second limit. */
+const MEMORY_TIME_LEFT_MS = 35_000;
+
 export async function runConversationTick(options: {
   manual: boolean;
   run?: ManualRunRequest;
   jobId?: string;
 }): Promise<ConversationTickResult> {
+  const startedAt = Date.now();
   const result: ConversationTickResult = { skipped: null, planned: 0, published: 0, calls: 0, notes: [] };
   const run = options.manual ? options.run : undefined;
   const onlyJob = options.manual ? options.jobId : undefined;
@@ -1148,6 +1153,7 @@ export async function runConversationTick(options: {
     try {
       const speaking = lineVoice(personas.get(job.author_id), group);
       const moment = job.kind === "start_post" ? await loadRunMomentForJob(job.id) : null;
+      const memories = await memoriesForLine(job.author_id, job.group_id).catch(() => [] as string[]);
       line = await writeConversationLine({
         topic: topicOrDefault(group.topic),
         personality: personalityOrDefault(speaking.personality),
@@ -1170,6 +1176,7 @@ export async function runConversationTick(options: {
         language: writingLanguage(home, locale),
         fact,
         visitor: visitingFrom ? { from: visitingFrom, here: locale?.place ?? "" } : null,
+        memories,
       });
     } catch (error) {
       const groqError = error instanceof GroqCallError ? error : null;
@@ -1254,6 +1261,15 @@ export async function runConversationTick(options: {
       });
       result.notes.push(message);
     }
+  }
+
+  if (!run && !onlyJob && Date.now() - startedAt < MEMORY_TIME_LEFT_MS) {
+    const remembered = await rememberRecentLines().catch((error: unknown) => ({
+      saved: 0,
+      error: error instanceof Error ? error.message : "Memory pass failed",
+    }));
+    if (remembered.saved > 0) result.notes.push(`Remembered ${remembered.saved} new ${remembered.saved === 1 ? "fact" : "facts"} about the props.`);
+    if (remembered.error) result.notes.push(`Memory: ${remembered.error}`);
   }
 
   return result;

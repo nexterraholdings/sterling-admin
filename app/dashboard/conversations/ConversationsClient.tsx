@@ -36,7 +36,10 @@ import {
   setDailyCallBudget,
   skipQueuedLine,
   updateSentLine,
+  loadPropMemoriesAction,
+  deletePropMemoryAction,
 } from "@/app/dashboard/conversations/actions";
+import type { PropMemory } from "@/lib/conversations/memory";
 import { hourIn, nyDateKey, withinActiveHours } from "@/lib/conversations/time";
 import {
   abbrevHint,
@@ -1539,6 +1542,7 @@ function RunScreen({
                             disabled={busy}
                             onSave={(input) => onSaveHome(account.userId, input)}
                           />
+                          <AccountMemories userId={account.userId} />
                         </div>
                         <button
                           type="button"
@@ -2786,6 +2790,67 @@ function AccountHome({
             Save
           </button>
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AccountMemories({ userId }: { userId: string }) {
+  const [memories, setMemories] = useState<PropMemory[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [working, setWorking] = useState(false);
+
+  async function load(work: () => Promise<PropMemory[]>) {
+    setWorking(true);
+    try {
+      setMemories(await work());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load memories");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="mt-1 text-xs text-zinc-500">
+      <button
+        type="button"
+        disabled={working}
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          if (next) void load(() => loadPropMemoriesAction(userId));
+        }}
+        className="text-cyan-200/90 disabled:opacity-50"
+      >
+        {open ? "Hide memories" : "Memories"}
+      </button>
+      {open ? (
+        memories == null ? (
+          <p className="mt-1">Loading…</p>
+        ) : memories.length === 0 ? (
+          <p className="mt-1">Nothing remembered yet. Facts are saved after its lines post.</p>
+        ) : (
+          <ul className="mt-2 flex flex-col gap-1">
+            {memories.map((memory) => (
+              <li key={memory.id} className="flex items-start justify-between gap-3 rounded-lg border border-zinc-800 px-2 py-1.5">
+                <span className="text-zinc-300">
+                  {memory.aboutName ? <span className="text-zinc-500">About {memory.aboutName}: </span> : null}
+                  {memory.fact}
+                  <span className="ml-2 text-zinc-600">importance {memory.importance}</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={working}
+                  onClick={() => void load(() => deletePropMemoryAction(memory.id, userId))}
+                  className="shrink-0 text-rose-300/80 disabled:opacity-50"
+                >
+                  Forget
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
       ) : null}
     </div>
   );

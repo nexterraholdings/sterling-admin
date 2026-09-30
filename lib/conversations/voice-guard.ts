@@ -151,7 +151,7 @@ export function robotTells(text: string, english: boolean, recent: string[] = []
 const SLURS =
   /(?<![\p{L}])(n[i1!]gg(?:a|er|ah|as|ers|uh)s?|f[a@]gg?(?:ot|ots|s)?|dykes?|retard(?:s|ed)?|tr[a@]nn(?:y|ies)|sh[e3]m[a@]les?|k[i1]kes?|sp[i1]cs?|ch[i1]nks?|g[o0]{2}ks?|wetbacks?|beaners?|towelheads?|raghe[a@]ds?|sand ?n[i1]gg\w*|coons?|jungle ?bunn(?:y|ies)|gypp?(?:y|ies)|paki(?:s)?|wogs?|golliwogs?)(?![\p{L}])/iu;
 const THREATS =
-  /\b(kill (?:yo)?urself|kys|(?:i(?:'?ll| will| am gonna|m gonna| gonna)|we(?:'?ll| will| gonna)) (?:kill|shoot|stab|murder) (?:you|u|ya|him|her|them)|hope (?:you|u) (?:die|get (?:shot|killed|hit))|(?:go )?die in a fire)\b/i;
+  /\b(kill (?:yo)?urself|kys|(?:i(?:['’]?ll| will| am gonna|['’]?m gonna| gonna)|we(?:['’]?ll| will| gonna|['’]?re gonna| are gonna)) (?:shoot|stab|murder) (?:you|u|ya|him|her|them)(?! (?:a|an|the) (?:text|message|msg|dm|email|line|pic|photo|link|invite))|hope (?:you|u) (?:die|get (?:shot|killed|hit))|(?:go )?die in a fire)\b/i;
 const STRONG_SWEARS = /(?<![\p{L}])(f+u+c+k\w*|fk|fck\w*|motherf\w*|bitch\w*|asshole\w*|dick(?:s|head|heads)?|cunt\w*|pussy|cock(?:s|y)?|whore\w*|slut\w*|twat\w*|bastard\w*)(?![\p{L}])/iu;
 const SEXUAL =
   /(?<![\p{L}])(sex\w*|horny|naked|nudes?|porn\w*|boobs?|tits?|titties|hook(?:ing)? up|hooked up|make out|making out|thicc|dtf|cum(?:ming)?|orgasm\w*|blowjob\w*|bj)(?![\p{L}])/iu;

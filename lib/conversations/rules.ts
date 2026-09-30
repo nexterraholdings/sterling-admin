@@ -168,7 +168,7 @@ export function parseAttitude(value: string | null | undefined): Attitude {
 
 /** Lines no strength or attitude unlocks. Code enforces them too, in voice-guard. */
 export const HARD_LIMITS =
-  "Hard limits that nothing overrides: no slurs or hate aimed at any group of people, no threats, no telling anyone to hurt themselves, and nothing sexual about or from a minor.";
+  "Hard limits that nothing overrides: no slurs or hate aimed at any group of people, no real threats, no telling anyone to hurt themselves, and nothing sexual about or from a minor. Obvious joking exaggeration is fine, like 'I'll kill you if you spoil the game'.";
 
 /** `required` means the line must come back with a cuss word in it. */
 export function swearPlan(enabled: boolean, rate: SwearRate, strength: SwearStrength = "mild"): { instruction: string; required: boolean } {

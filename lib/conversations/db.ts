@@ -163,6 +163,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
     supabaseAdmin
       .from("prop_engagement_jobs")
       .select("id, group_id, author_id, comment_id, kind, body, error, status, finished_at")
+      .neq("kind", "like")
       .gte("created_at", since)
       .in("status", ["done", "failed"])
       .order("finished_at", { ascending: false })
@@ -170,24 +171,28 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
     supabaseAdmin
       .from("prop_engagement_jobs")
       .select("id, group_id, author_id, kind, run_at")
+      .neq("kind", "like")
       .eq("status", "pending")
       .order("run_at", { ascending: true })
       .limit(50),
     supabaseAdmin
       .from("prop_engagement_jobs")
       .select("id, group_id, author_id, kind, status, run_at, body, error, cast_ids, spread_minutes, created_at")
+      .neq("kind", "like")
       .in("status", ["pending", "running"])
       .order("run_at", { ascending: true })
       .limit(120),
     supabaseAdmin
       .from("prop_engagement_jobs")
       .select("id, group_id, author_id, kind, status, run_at, body, error, cast_ids, spread_minutes, created_at")
+      .neq("kind", "like")
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .limit(200),
     supabaseAdmin
       .from("prop_engagement_jobs")
       .select("id, group_id, author_id, kind, status, run_at, body, error, cast_ids, spread_minutes, created_at")
+      .neq("kind", "like")
       .gte("finished_at", since)
       .in("status", ["done", "failed", "skipped"])
       .order("finished_at", { ascending: false })

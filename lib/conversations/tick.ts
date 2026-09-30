@@ -22,6 +22,7 @@ import {
 import { loadGroupLocales, zoneFor, type HubLocale } from "@/lib/conversations/hub-locale";
 import { hubListsByProp, loadPropHomes, visitorFrom, writingLanguage, type PropHome } from "@/lib/conversations/prop-home";
 import { loadDirectorGroupIds, loadJobDirection } from "@/lib/conversations/director";
+import { likeComment, queueLikesAfterPost } from "@/lib/conversations/likes";
 import { ensureGroupHubWatch } from "@/lib/knowledge/auto-watch";
 import { loadFact, loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
 import type { KnowledgeFact } from "@/lib/knowledge/types";
@@ -66,7 +67,7 @@ type JobRow = {
   id: string;
   group_id: string;
   author_id: string;
-  kind: "start_post" | "reply";
+  kind: "start_post" | "reply" | "like";
   parent_comment_id: string | null;
   run_at: string;
   cast_ids: string[] | null;
@@ -113,6 +114,7 @@ async function scheduleReplies(input: {
     .from("prop_engagement_jobs")
     .select("author_id, status")
     .eq("parent_comment_id", input.parentCommentId)
+    .eq("kind", "reply")
     .in("status", ["pending", "running", "done"]);
   if (error) throw new Error(error.message);
   const used = new Set(
@@ -1064,6 +1066,7 @@ export async function runConversationTick(options: {
     const scheduled = Boolean(group && group.week.days > 0);
     const usedToday = callsByGroup.get(job.group_id) ?? 0;
     const overCap = Boolean(
+      job.kind !== "like" &&
       group &&
         (usedToday >= group.week.callsPerDay ||
           (job.kind === "start_post" && usedToday + 1 + group.repliesPerPost > group.week.callsPerDay)),
@@ -1108,6 +1111,18 @@ export async function runConversationTick(options: {
       .maybeSingle();
     if (claimError) throw new Error(claimError.message);
     if (!claimed) continue;
+
+    if (job.kind === "like") {
+      const liked = job.parent_comment_id
+        ? await likeComment(job.author_id, job.parent_comment_id, job.group_id)
+        : { ok: false, reason: "Like is missing its post" };
+      await finishJob(job.id, {
+        status: liked.ok ? "done" : "skipped",
+        error: liked.ok ? null : liked.reason ?? "Could not like",
+        finished_at: new Date().toISOString(),
+      });
+      continue;
+    }
 
     let parentBody: string | null = null;
     if (job.kind === "reply") {
@@ -1248,6 +1263,13 @@ export async function runConversationTick(options: {
       result.published += 1;
       result.notes.push(line.text);
       if (job.kind === "start_post" && fact) await markFactUsed(fact.id);
+      await queueLikesAfterPost({
+        groupId: job.group_id,
+        commentId: item.id,
+        authorId: job.author_id,
+        memberIds,
+        voices: personas,
+      });
       if (job.kind === "start_post") {
         const cast = Array.isArray(job.cast_ids) ? job.cast_ids.map((id) => String(id)).filter(Boolean) : [];
         const natural = naturalGap(job.spread_minutes);

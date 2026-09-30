@@ -123,6 +123,7 @@ export async function rememberRecentLines(): Promise<RememberResult> {
     .from("prop_engagement_jobs")
     .select("id, group_id, author_id, kind, body, comment_id, parent_comment_id, finished_at")
     .eq("status", "done")
+    .neq("kind", "like")
     .is("remembered_at", null)
     .gte("finished_at", new Date(Date.now() - LOOKBACK_MS).toISOString())
     .order("finished_at", { ascending: true })

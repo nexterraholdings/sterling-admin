@@ -218,7 +218,7 @@ async function gatherContext(groupId: string, horizonHours: number): Promise<Con
   type DoneRow = { author_id: string; kind: string; finished_at: string | null; knowledge_items: { source?: string } | Array<{ source?: string }> | null };
   for (const row of (doneJobs ?? []) as unknown as DoneRow[]) {
     const author = String(row.author_id);
-    if (!lastSpoke.has(author) && row.finished_at) lastSpoke.set(author, row.finished_at);
+    if (row.kind !== "like" && !lastSpoke.has(author) && row.finished_at) lastSpoke.set(author, row.finished_at);
     const joined = Array.isArray(row.knowledge_items) ? row.knowledge_items[0] : row.knowledge_items;
     if (joined?.source === "weather" && row.finished_at) {
       const at = new Date(row.finished_at).getTime();

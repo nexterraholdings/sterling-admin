@@ -22,6 +22,7 @@ import {
 import { loadGroupLocales, zoneFor, type HubLocale } from "@/lib/conversations/hub-locale";
 import { hubListsByProp, loadPropHomes, visitorFrom, writingLanguage, type PropHome } from "@/lib/conversations/prop-home";
 import { loadDirectorGroupIds, loadJobDirection } from "@/lib/conversations/director";
+import { EXISTING_THREAD_LOOKBACK_MS, existingThreadRoom } from "@/lib/conversations/existing-threads";
 import { likeComment, queueLikesAfterPost } from "@/lib/conversations/likes";
 import { ensureGroupHubWatch } from "@/lib/knowledge/auto-watch";
 import { loadFact, loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
@@ -204,35 +205,10 @@ async function joinExistingThreads(input: {
   immediateFirst: boolean;
 }): Promise<number> {
   if (input.maxNew <= 0 || input.memberIds.length === 0) return 0;
-
-  const { data: starts, error: startError } = await supabaseAdmin
-    .from("prop_engagement_jobs")
-    .select("comment_id")
-    .eq("group_id", input.groupId)
-    .eq("kind", "start_post")
-    .gte("created_at", input.sinceIso);
-  if (startError) throw new Error(startError.message);
-  const startedHere = new Set(
-    ((starts ?? []) as Array<{ comment_id: string | null }>).map((row) => String(row.comment_id ?? "")).filter(Boolean),
-  );
-
-  const { data: replies, error: replyError } = await supabaseAdmin
-    .from("prop_engagement_jobs")
-    .select("parent_comment_id")
-    .eq("group_id", input.groupId)
-    .eq("kind", "reply")
-    .in("status", ["pending", "running", "done"])
-    .gte("created_at", input.sinceIso);
-  if (replyError) throw new Error(replyError.message);
-  const alreadyJoined = ((replies ?? []) as Array<{ parent_comment_id: string | null }>).filter((row) => {
-    const parent = String(row.parent_comment_id ?? "");
-    return parent && !startedHere.has(parent);
-  }).length;
-  const room = Math.max(0, 4 - alreadyJoined);
-  const budget = Math.min(input.maxNew, room);
+  const budget = Math.min(input.maxNew, await existingThreadRoom(input.groupId, input.sinceIso));
   if (budget <= 0) return 0;
 
-  const lookback = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const lookback = new Date(Date.now() - EXISTING_THREAD_LOOKBACK_MS).toISOString();
   const { data: comments, error } = await supabaseAdmin
     .from("area_discussion_comments")
     .select("id, author_id, body")
@@ -257,6 +233,7 @@ async function joinExistingThreads(input: {
   }
   return created;
 }
+
 
 function weekWindow(row: {
   week_days?: number | null;
@@ -606,7 +583,7 @@ async function planJobs(
       });
     }
 
-    if (!directed && parseWeekDays(group.week_days) === 0) {
+    if (parseWeekDays(group.week_days) === 0) {
       planned += await joinExistingThreads({
         groupId,
         memberIds,

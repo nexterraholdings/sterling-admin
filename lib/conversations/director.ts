@@ -2,6 +2,7 @@ import { GEMINI_LITE_MODEL, GEMINI_MODEL, geminiConfigured, geminiJson } from "@
 import { groqJson, parseJsonObject } from "@/lib/ai/groq-json";
 import { listJoinQueue, loadCastingSettings, type CastingSettings, type JoinQueueItem } from "@/lib/conversations/casting";
 import { loadConversationSettings, loadConversationUsage, loadPropMemberIdsByGroup } from "@/lib/conversations/db";
+import { EXISTING_THREAD_LOOKBACK_MS, existingThreadRoom } from "@/lib/conversations/existing-threads";
 import { loadGroupLocales, type HubLocale } from "@/lib/conversations/hub-locale";
 import { recordRunMoment } from "@/lib/conversations/moments";
 import { hubListsByProp, loadPropHomes } from "@/lib/conversations/prop-home";
@@ -139,6 +140,8 @@ type Context = {
   pending: Array<{ kind: string; author: string; runAt: string }>;
   journal: string[];
   likedBy: Set<string>;
+  /** Replies still allowed today on threads join existing threads can reach, the same cap it uses. */
+  existingRoom: number;
 };
 
 async function gatherContext(groupId: string, horizonHours: number): Promise<Context> {
@@ -288,6 +291,7 @@ async function gatherContext(groupId: string, horizonHours: number): Promise<Con
     })),
     journal: ((journalRows ?? []) as Array<{ note: string }>).map((row) => row.note),
     likedBy: new Set(((likes ?? []) as Array<{ comment_id: string; user_id: string }>).map((row) => `${row.comment_id}:${row.user_id}`)),
+    existingRoom: await existingThreadRoom(groupId, since),
   };
 }
 
@@ -360,7 +364,7 @@ function buildPrompt(ctx: Context, homes: Map<string, { place: string }>): { sys
     "- Replies should move the conversation: disagree, joke, ask a follow up, or call back to what someone remembers. Build running bits and friendly rivalries between members over time.",
     "- Fit each member: their age, temperament, interests, and memories. Never have them contradict what they remember.",
     "- A brief is one sentence telling the writer what this person wants to say or do. Do not write the message itself.",
-    "- Only reply to or like comments marked prop. Comments from real members are context only.",
+    `- Likes only go on comments marked prop. Replies to real members are allowed, at most ${ctx.existingRoom} more today.`,
     "- Likes are cheap and common. People like more than they reply.",
     `- Times are local HH:MM between ${ctx.window.start}:00 and ${ctx.window.end}:00, within the next ${ctx.horizonHours} hours.`,
     "- Add a note when you learn something about this group worth remembering for next time.",
@@ -445,6 +449,7 @@ function validate(raw: Record<string, unknown> | null, ctx: Context): { reasonin
   let calls = 0;
   let weatherPlanned = Boolean(ctx.weatherUsedAt && Date.now() - ctx.weatherUsedAt < WEATHER_GAP_MS);
   const replyKeys = new Set<string>();
+  let existingRoom = ctx.existingRoom;
   const likeKeys = new Set<string>(ctx.likedBy);
   const lastAuthor: { id: string | null; at: number } = { id: null, at: 0 };
 
@@ -520,8 +525,8 @@ function validate(raw: Record<string, unknown> | null, ctx: Context): { reasonin
       drop(item, "unknown comment");
       continue;
     }
-    if (!comment.isProp) {
-      drop(item, "a real member's comment, waiting on the AI badge");
+    if (!comment.isProp && type === "like") {
+      drop(item, "a real member's comment, likes wait on the AI badge");
       continue;
     }
     if (comment.author_id === prop.id) {
@@ -542,6 +547,17 @@ function validate(raw: Record<string, unknown> | null, ctx: Context): { reasonin
       if (calls >= ctx.callsLeft) {
         drop(item, "no model calls left today");
         continue;
+      }
+      if (!comment.isProp) {
+        if (!String(comment.body ?? "").trim() || Date.now() - new Date(comment.created_at).getTime() > EXISTING_THREAD_LOOKBACK_MS) {
+          drop(item, "older than join existing threads allows");
+          continue;
+        }
+        if (existingRoom <= 0) {
+          drop(item, "join existing threads limit for today reached");
+          continue;
+        }
+        existingRoom -= 1;
       }
       replyKeys.add(key);
       const brief = String(item.brief ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
@@ -938,5 +954,7 @@ export async function runDirector(options: { maxMs: number }): Promise<DirectorR
   }
   return result;
 }
+
+
 
 

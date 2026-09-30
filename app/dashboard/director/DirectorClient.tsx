@@ -103,7 +103,7 @@ export function DirectorClient({ initial }: { initial: DirectorDashboard }) {
             <p className="mt-1 max-w-2xl text-sm text-zinc-400">
               For groups you hand over, the director reads the recent chat, each prop&apos;s persona and memories, and the approved facts,
               then decides who posts, replies, or likes over the next few hours. Code checks every action against the caps, active hours,
-              and membership before anything is queued. Props only reply to and like other props until the AI badge ships. Once a week per city it
+              and membership before anything is queued. Replies to real members follow the same limit as join existing threads; likes on real members wait for the AI badge. Once a week per city it
               may also propose a new group owned by a prop; those always wait for your approval, even in automatic mode.
             </p>
           </div>
@@ -165,7 +165,7 @@ export function DirectorClient({ initial }: { initial: DirectorDashboard }) {
       <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
         <h2 className="text-sm font-semibold text-zinc-50">Groups</h2>
         <p className="mt-1 text-xs text-zinc-500">
-          Directed groups stop getting random start posts and thread joins. Replies to their own posts still get scheduled as before.
+          Directed groups stop getting random start posts. Thread joins keep running. Replies to their own posts still get scheduled as before.
         </p>
         {data.groups.length === 0 ? (
           <div className="mt-4">

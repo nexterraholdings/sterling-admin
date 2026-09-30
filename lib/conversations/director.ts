@@ -1,5 +1,6 @@
 import { GEMINI_LITE_MODEL, GEMINI_MODEL, geminiConfigured, geminiJson } from "@/lib/ai/gemini";
 import { groqJson, parseJsonObject } from "@/lib/ai/groq-json";
+import { listJoinQueue, loadCastingSettings, type CastingSettings, type JoinQueueItem } from "@/lib/conversations/casting";
 import { loadConversationSettings, loadConversationUsage, loadPropMemberIdsByGroup } from "@/lib/conversations/db";
 import { loadGroupLocales, type HubLocale } from "@/lib/conversations/hub-locale";
 import { recordRunMoment } from "@/lib/conversations/moments";
@@ -199,11 +200,11 @@ async function gatherContext(groupId: string, horizonHours: number): Promise<Con
       castIds.length > 0
         ? supabaseAdmin
             .from("prop_memories")
-            .select("prop_id, fact, importance, created_at")
+            .select("prop_id, about_id, fact, importance, created_at")
             .in("prop_id", castIds)
             .order("importance", { ascending: false })
             .order("created_at", { ascending: false })
-            .limit(castIds.length * 6)
+            .limit(castIds.length * 8)
         : Promise.resolve({ data: [], error: null }),
       supabaseAdmin.from("prop_group_journal").select("note").eq("group_id", groupId).not("note", "like", "Lesson: nothing clear%").order("created_at", { ascending: false }).limit(JOURNAL_IN_CONTEXT),
       profilesFor([...castIds]),
@@ -233,11 +234,19 @@ async function gatherContext(groupId: string, horizonHours: number): Promise<Con
   const groupCallsLeft = scheduled ? Math.max(0, Number(cfg.calls_per_day ?? 12) - callsToday) : Number.POSITIVE_INFINITY;
   const callsLeft = Math.max(0, Math.min(settings.dailyCallBudget - usage.calls, groupCallsLeft));
 
+  const memoryList = (memoryRows ?? []) as Array<{ prop_id: string; about_id: string | null; fact: string }>;
+  const aboutNames = await profilesFor(memoryList.map((row) => String(row.about_id ?? "")));
   const memoriesByProp = new Map<string, string[]>();
-  for (const row of (memoryRows ?? []) as Array<{ prop_id: string; fact: string }>) {
-    const list = memoriesByProp.get(String(row.prop_id)) ?? [];
-    if (list.length < 4) list.push(row.fact);
-    memoriesByProp.set(String(row.prop_id), list);
+  const counts = new Map<string, { own: number; about: number }>();
+  for (const row of memoryList) {
+    const propId = String(row.prop_id);
+    const count = counts.get(propId) ?? { own: 0, about: 0 };
+    const about = row.about_id ? aboutNames.get(String(row.about_id))?.name : null;
+    if (about ? count.about >= 2 : count.own >= 3) continue;
+    if (about) count.about += 1;
+    else count.own += 1;
+    counts.set(propId, count);
+    memoriesByProp.set(propId, [...(memoriesByProp.get(propId) ?? []), about ? `About ${about}: ${row.fact}` : row.fact]);
   }
 
   const facts = hubId && watched.has(hubId) ? await listFactsForGroup(hubId, groupId, 8) : [];
@@ -744,6 +753,8 @@ export type DirectorDashboard = {
   groups: Array<{ groupId: string; title: string; hubTitle: string; planner: "random" | "director"; enabled: boolean; props: number }>;
   plans: Array<DirectorPlan & { groupTitle: string }>;
   journal: Array<{ groupId: string; note: string; createdAt: string }>;
+  casting: CastingSettings;
+  joins: JoinQueueItem[];
   geminiReady: boolean;
   loadedAt: string;
 };
@@ -788,8 +799,11 @@ export async function loadDirectorDashboard(): Promise<DirectorDashboard> {
     }));
   }
 
+  const [casting, joins] = await Promise.all([loadCastingSettings(), listJoinQueue()]);
   return {
     settings,
+    casting,
+    joins,
     groups: configRows
       .map((row) => ({
         groupId: String(row.group_id),

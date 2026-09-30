@@ -6,7 +6,7 @@ import { milesBetween } from "@/lib/seeded-hubs/worldCities";
 export const PROP_HOME_SCHEMA_HINT = "Prop homes are not in the database yet. Run supabase/sql/prop_account_home.sql.";
 
 /** Closer than this to home, a prop is a local. */
-const LOCAL_MILES = 60;
+export const LOCAL_MILES = 60;
 
 export type PropHome = {
   hubId: string;

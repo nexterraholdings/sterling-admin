@@ -1,3 +1,4 @@
+import { ensureGroupHubWatch } from "@/lib/knowledge/auto-watch";
 import { isMissingSchemaError } from "@/lib/discussions/listDiscussions";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { DEFAULT_EDGE, loadRunEdges } from "@/lib/conversations/edge";
@@ -60,7 +61,7 @@ function chunks<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-async function listPropProfiles(): Promise<PropProfile[]> {
+export async function listPropProfiles(): Promise<PropProfile[]> {
   const rows: PropProfile[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabaseAdmin
@@ -795,6 +796,7 @@ export async function setGroupIncluded(groupId: string, included: boolean): Prom
     { onConflict: "group_id" },
   );
   if (error) throw new Error(error.message);
+  await ensureGroupHubWatch(groupId);
 }
 
 export async function saveConversationGroup(input: {
@@ -830,6 +832,7 @@ export async function saveConversationGroup(input: {
     { onConflict: "group_id" },
   );
   if (error) throw new Error(error.message);
+  if (input.enabled) await ensureGroupHubWatch(input.groupId);
 }
 
 export async function savePersona(userId: string, voice: PropVoice): Promise<void> {

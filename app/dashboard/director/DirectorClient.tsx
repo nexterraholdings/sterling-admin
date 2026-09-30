@@ -5,7 +5,15 @@ import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
 import { EmptyState, FilterChip, formatRelativeTime, MetricPill } from "@/components/admin/ui";
 import type { DirectorDashboard, DirectorMode, DirectorPlan } from "@/lib/conversations/director";
-import { decidePlanAction, planGroupNowAction, refreshDirector, saveDirectorSettingsAction, setGroupPlannerAction } from "./actions";
+import {
+  cancelJoinAction,
+  decidePlanAction,
+  planGroupNowAction,
+  refreshDirector,
+  saveCastingSettingsAction,
+  saveDirectorSettingsAction,
+  setGroupPlannerAction,
+} from "./actions";
 
 const MODES: Array<{ id: DirectorMode; label: string; hint: string }> = [
   { id: "off", label: "Off", hint: "No plans. Director groups stay quiet except replies to their own posts." },
@@ -202,6 +210,8 @@ export function DirectorClient({ initial }: { initial: DirectorDashboard }) {
         )}
       </section>
 
+      <CastingSection data={data} busy={busy} run={run} />
+
       <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-zinc-50">Plans</h2>
@@ -324,5 +334,124 @@ export function DirectorClient({ initial }: { initial: DirectorDashboard }) {
         )}
       </section>
     </div>
+  );
+}
+
+function CastingSection({
+  data,
+  busy,
+  run,
+}: {
+  data: DirectorDashboard;
+  busy: string | null;
+  run: (key: string, work: () => Promise<DirectorDashboard>, success?: string) => Promise<void>;
+}) {
+  const casting = data.casting;
+  const pending = data.joins.filter((join) => join.status === "pending");
+  const recent = data.joins.filter((join) => join.status !== "pending").slice(0, 12);
+  const select = "rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 disabled:opacity-50";
+  return (
+    <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-50">Joining groups</h2>
+          <p className="mt-1 max-w-2xl text-xs text-zinc-500">
+            Once a day per city, props are matched to public groups near home that fit their interests and age, then join a few at a time at
+            spread-out hours. Teen personas never join groups with real members. A group with 3 props turns on for the director by itself,
+            and its city gets a news and weather watch in review.
+          </p>
+        </div>
+        <FilterChip
+          active={casting.enabled}
+          onClick={() =>
+            void run("casting", () => saveCastingSettingsAction({ enabled: !casting.enabled }), casting.enabled ? "Joining paused." : "Joining on.")
+          }
+        >
+          {casting.enabled ? "On" : "Off"}
+        </FilterChip>
+      </div>
+      {!casting.ready ? (
+        <p className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+          Run supabase/sql/prop_casting.sql in the Supabase SQL editor to turn this on.
+        </p>
+      ) : (
+        <div className="mt-4 flex flex-wrap gap-2">
+          <select
+            value={casting.maxJoinsPerDay}
+            disabled={busy !== null}
+            onChange={(event) => void run("casting", () => saveCastingSettingsAction({ maxJoinsPerDay: Number(event.target.value) }))}
+            className={select}
+          >
+            {[0, 1, 2, 3, 5, 8, 12].map((value) => (
+              <option key={value} value={value}>
+                {value} joins a day
+              </option>
+            ))}
+          </select>
+          <select
+            value={casting.maxPropShare}
+            disabled={busy !== null}
+            onChange={(event) => void run("casting", () => saveCastingSettingsAction({ maxPropShare: Number(event.target.value) }))}
+            className={select}
+          >
+            {[0.2, 0.3, 0.4, 0.5].map((value) => (
+              <option key={value} value={value}>
+                Props at most {Math.round(value * 100)}% of a group with real members
+              </option>
+            ))}
+          </select>
+          <select
+            value={casting.maxGroupsPerProp}
+            disabled={busy !== null}
+            onChange={(event) => void run("casting", () => saveCastingSettingsAction({ maxGroupsPerProp: Number(event.target.value) }))}
+            className={select}
+          >
+            {[2, 4, 6, 8, 12].map((value) => (
+              <option key={value} value={value}>
+                Up to {value} groups per prop
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {pending.length > 0 ? (
+        <ul className="mt-4 flex flex-col divide-y divide-zinc-800">
+          {pending.map((join) => (
+            <li key={join.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
+              <div className="min-w-0 text-sm">
+                <span className="text-zinc-100">{join.propName}</span>
+                <span className="text-zinc-500"> joins </span>
+                <span className="text-zinc-100">{join.groupTitle}</span>
+                <span className="ml-2 font-mono text-xs text-zinc-500">{timeOf(join.runAt)}</span>
+                {join.reason ? <p className="text-xs text-zinc-400">{join.reason}</p> : null}
+              </div>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => void run(`join:${join.id}`, () => cancelJoinAction(join.id))}
+                className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : casting.ready ? (
+        <p className="mt-4 text-xs text-zinc-500">No joins queued.</p>
+      ) : null}
+      {recent.length > 0 ? (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-xs text-zinc-500">Recent joins</summary>
+          <ul className="mt-2 flex flex-col gap-1">
+            {recent.map((join) => (
+              <li key={join.id} className="text-xs text-zinc-400">
+                {join.propName} � {join.groupTitle} � {join.status}
+                {join.error ? <span className="text-amber-200"> � {join.error}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </section>
   );
 }

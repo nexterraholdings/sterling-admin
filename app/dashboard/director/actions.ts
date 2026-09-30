@@ -2,6 +2,7 @@
 
 import { logAdminAction } from "@/app/dashboard/lib/audit-log";
 import { OPERATOR_ROLES, requireAdmin } from "@/app/dashboard/lib/dal";
+import { cancelJoin, saveCastingSettings, type CastingSettings } from "@/lib/conversations/casting";
 import {
   applyPlan,
   loadDirectorDashboard,
@@ -70,5 +71,28 @@ export async function decidePlanAction(planId: string, approve: boolean): Promis
     actorId: admin.id,
     actorLabel: admin.email ?? admin.fullName,
   });
+  return loadDirectorDashboard();
+}
+
+export async function saveCastingSettingsAction(patch: Partial<Omit<CastingSettings, "ready">>): Promise<DirectorDashboard> {
+  const admin = await requireAdmin(OPERATOR_ROLES);
+  await saveCastingSettings(patch);
+  await logAdminAction({
+    category: "admin",
+    action: "prop_casting_settings",
+    detail: Object.entries(patch)
+      .map(([key, value]) => `${key} ${String(value)}`)
+      .join(", "),
+    targetType: "prop_director",
+    targetId: "casting",
+    actorId: admin.id,
+    actorLabel: admin.email ?? admin.fullName,
+  });
+  return loadDirectorDashboard();
+}
+
+export async function cancelJoinAction(id: string): Promise<DirectorDashboard> {
+  await requireAdmin(OPERATOR_ROLES);
+  await cancelJoin(id);
   return loadDirectorDashboard();
 }

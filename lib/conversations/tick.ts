@@ -22,6 +22,7 @@ import {
 import { loadGroupLocales, zoneFor, type HubLocale } from "@/lib/conversations/hub-locale";
 import { hubListsByProp, loadPropHomes, visitorFrom, writingLanguage, type PropHome } from "@/lib/conversations/prop-home";
 import { loadDirectorGroupIds, loadJobDirection } from "@/lib/conversations/director";
+import { ensureGroupHubWatch } from "@/lib/knowledge/auto-watch";
 import { loadFact, loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
 import type { KnowledgeFact } from "@/lib/knowledge/types";
 import { parseAbbrev, parseGrammar, parseRunRules, parseSwearRate, type SwearRate } from "@/lib/conversations/rules";
@@ -749,6 +750,7 @@ async function planManualRun(run: ManualRunRequest, members: MemberMap): Promise
     { onConflict: "group_id" },
   );
   if (saveError) throw new Error(saveError.message);
+  await ensureGroupHubWatch(groupId);
   if (week) return fillWeekForGroup(groupId, { replaceFuture: true, castIds: accountIds });
   await clearFutureStartPosts(groupId);
 

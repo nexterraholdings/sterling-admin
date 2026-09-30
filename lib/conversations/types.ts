@@ -168,6 +168,17 @@ export type RegionRunGroup = {
 export type RegionRunAccount = RunAccount & {
   included: boolean;
   groupTitles: string[];
+  /** Where this prop lives. Null when none of its groups has a hub. */
+  home: {
+    hubId: string;
+    place: string;
+    languages: string[];
+    /** "set" by an admin, or taken from the hub where most of its groups are. */
+    source: "set" | "groups";
+    languagesSet: boolean;
+  } | null;
+  /** Home place when this region is more than 60 miles from home; the prop writes as a visitor. */
+  visitorFrom: string | null;
 };
 
 export type RegionRun = {

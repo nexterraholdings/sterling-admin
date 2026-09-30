@@ -240,7 +240,7 @@ export const WORLD_CITY_LOCALES: Record<string, CityLocale> = {
   auckland: { timeZone: "Pacific/Auckland", language: "English" },
 };
 
-function milesBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
+export function milesBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const rad = Math.PI / 180;
   const dLat = (lat2 - lat1) * rad;
   const dLng = (lng2 - lng1) * rad;

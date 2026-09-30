@@ -200,6 +200,8 @@ export async function writeConversationLine(input: {
   language?: string;
   /** From the knowledge hub. An opening post is written about this and nothing else; a reply may not add to it. */
   fact?: { claim: string; author: string } | null;
+  /** Set when this prop lives far from the group's hub. */
+  visitor?: { from: string; here: string } | null;
 }): Promise<GroqLine> {
   const key = process.env.GROQ_API_KEY?.trim();
   if (!key) throw new GroqCallError("GROQ_API_KEY is not configured");
@@ -251,6 +253,12 @@ export async function writeConversationLine(input: {
       ...(foreign
         ? [`Write the message in ${language}, the way people there actually text. The grammar and abbreviation levels apply in ${language}.`]
         : []),
+      ...(input.visitor
+        ? [
+            `This person does not live here. They live in ${input.visitor.from} and are visiting ${input.visitor.here || "this area"} or just got here.`,
+            "They do not know local history, local people, or local slang. They can mention where they are from, ask locals, or compare it with home.",
+          ]
+        : []),
       ...(objective ? [`Run objective: ${objective} Serve that goal while still sounding like one neighbor texting.`] : []),
       `Personality: ${personalityOrDefault(input.personality)}`,
       ...(character
@@ -288,7 +296,9 @@ export async function writeConversationLine(input: {
 
   const usage = { promptTokens: 0, completionTokens: 0, model: GROQ_MODEL };
   const messages: Array<{ role: string; content: string }> = [system, { role: "user", content: task }];
-  const grounded = fact ? [fact.claim, fact.author, place, input.parentBody ?? "", ...thread].join(" ") : "";
+  const grounded = fact
+    ? [fact.claim, fact.author, place, input.visitor?.from ?? "", input.visitor?.here ?? "", input.parentBody ?? "", ...thread].join(" ")
+    : "";
   let clean = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {

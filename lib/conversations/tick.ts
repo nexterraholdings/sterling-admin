@@ -18,6 +18,7 @@ import {
   withinActiveHours,
 } from "@/lib/conversations/time";
 import { loadGroupLocales, zoneFor, type HubLocale } from "@/lib/conversations/hub-locale";
+import { hubListsByProp, loadPropHomes, visitorFrom, writingLanguage, type PropHome } from "@/lib/conversations/prop-home";
 import { loadFactForThread, loadWatchedHubIds, markFactUsed, pickFactForGroup } from "@/lib/knowledge/db";
 import type { KnowledgeFact } from "@/lib/knowledge/types";
 import { parseAbbrev, parseGrammar, parseRunRules, parseSwearRate, type SwearRate } from "@/lib/conversations/rules";
@@ -887,6 +888,11 @@ async function callsByGroupToday(locales: Map<string, HubLocale>): Promise<Map<s
   return counts;
 }
 
+async function loadHomes(members: Map<string, string[]>): Promise<Map<string, PropHome>> {
+  const locales = await loadGroupLocales([...members.keys()]);
+  return loadPropHomes(hubListsByProp(members, locales));
+}
+
 export async function runConversationTick(options: {
   manual: boolean;
   run?: ManualRunRequest;
@@ -944,6 +950,7 @@ export async function runConversationTick(options: {
     .lt("run_at", new Date(Date.now() - 15 * 60_000).toISOString());
 
   const members = await loadPropMemberIdsByGroup();
+  let homes: Map<string, PropHome> | null = null;
   if (run) {
     result.planned = await planManualRun(run, members);
     const windowLabel = run.week
@@ -1131,6 +1138,10 @@ export async function runConversationTick(options: {
       fact = await loadFactForThread(job.parent_comment_id);
     }
 
+    homes ??= await loadHomes(members);
+    const home = homes.get(job.author_id);
+    const visitingFrom = visitorFrom(home, locale);
+
     let line: Awaited<ReturnType<typeof writeConversationLine>>;
     try {
       const speaking = lineVoice(personas.get(job.author_id), group);
@@ -1151,8 +1162,9 @@ export async function runConversationTick(options: {
         grammar: speaking.grammar,
         abbrev: speaking.abbrev,
         place: fact ? locale?.place : undefined,
-        language: locale?.language,
+        language: writingLanguage(home, locale),
         fact,
+        visitor: visitingFrom ? { from: visitingFrom, here: locale?.place ?? "" } : null,
       });
     } catch (error) {
       const groqError = error instanceof GroqCallError ? error : null;

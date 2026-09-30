@@ -22,6 +22,7 @@ import {
 } from "@/lib/conversations/week";
 import { DEFAULT_ZONE, startOfNyDay } from "@/lib/conversations/time";
 import { loadGroupLocales, loadHubLocales, type HubLocale } from "@/lib/conversations/hub-locale";
+import { loadPropHomes, visitorFrom, type PropHome } from "@/lib/conversations/prop-home";
 import type {
   ConversationActiveRun,
   ConversationDashboard,
@@ -401,11 +402,17 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
   }));
 
   const moments = await loadRunMomentsSince(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
-  const [objectives, excludedByHub, pausedByHub, hubLocales] = await Promise.all([
+  const hubsByProp = new Map<string, string[]>();
+  for (const group of groups) {
+    if (!group.hubId) continue;
+    for (const member of group.members) hubsByProp.set(member.userId, [...(hubsByProp.get(member.userId) ?? []), group.hubId]);
+  }
+  const [objectives, excludedByHub, pausedByHub, hubLocales, homes] = await Promise.all([
     loadRegionObjectives(),
     loadExcludedByHub(),
     loadRunPause(),
     loadHubLocales(groups.map((group) => group.hubId)),
+    loadPropHomes(hubsByProp),
   ]);
   const activeRuns = buildActiveRuns(
     openJobResult.data ?? [],
@@ -415,7 +422,7 @@ export async function loadConversationDashboard(): Promise<ConversationDashboard
     moments,
     personaResult,
   );
-  const regionRuns = buildRegionRuns(groups, activeRuns, objectives, excludedByHub, pausedByHub, personaResult, hubLocales);
+  const regionRuns = buildRegionRuns(groups, activeRuns, objectives, excludedByHub, pausedByHub, personaResult, hubLocales, homes);
 
   return {
     settings,
@@ -629,6 +636,12 @@ function mergeSnapshots(runs: ConversationActiveRun[], fallback: ConversationGro
   };
 }
 
+function homeOf(home: PropHome | undefined): RegionRunAccount["home"] {
+  return home
+    ? { hubId: home.hubId, place: home.place, languages: home.languages, source: home.source, languagesSet: home.languagesSet }
+    : null;
+}
+
 function buildRegionRuns(
   groups: ConversationGroup[],
   runs: ConversationActiveRun[],
@@ -637,6 +650,7 @@ function buildRegionRuns(
   pausedByHub: Map<string, boolean>,
   voices: Map<string, PropVoice>,
   hubLocales: Map<string, HubLocale>,
+  homes: Map<string, PropHome>,
 ): RegionRun[] {
   const runByGroup = new Map(runs.map((run) => [run.groupId, run]));
   const byHub = new Map<string, ConversationGroup[]>();
@@ -669,6 +683,8 @@ function buildRegionRuns(
           moment: newer || !current?.moment ? moment ?? current?.moment ?? null : current.moment,
           included: !excluded.has(member.userId),
           groupTitles: [...(current?.groupTitles ?? []), group.title],
+          home: homeOf(homes.get(member.userId)),
+          visitorFrom: visitorFrom(homes.get(member.userId), hubLocales.get(hubId)),
         });
       }
     }

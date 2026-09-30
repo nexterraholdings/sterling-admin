@@ -20,6 +20,7 @@ import {
   saveRegionAbbrev,
   saveRegionGrammar,
   saveRegionLocaleAction,
+  savePropHomeAction,
   saveRegionObjectiveAction,
   saveRegionRules,
   saveRegionSwear,
@@ -49,6 +50,7 @@ import type {
   ConversationPersona,
   ConversationSettings,
   RegionRun,
+  RegionRunAccount,
 } from "@/lib/conversations/types";
 
 const inputCls =
@@ -409,6 +411,7 @@ export function ConversationsClient({ initial }: { initial: ConversationDashboar
             void run(`account:${userId}`, () => setRegionAccountIncluded(hubId, userId, included))
           }
           onSaveVoice={(userId, voice) => void run(`persona:${userId}`, () => savePropVoice(userId, voice))}
+          onSaveHome={(userId, input) => void run(`home:${userId}`, () => savePropHomeAction(userId, input))}
           onPause={(hubId, paused) => void run(`pause:${hubId}`, () => setRegionRunPaused(hubId, paused))}
           groups={data.groups}
           onAddAccounts={(groupId, userIds) =>
@@ -640,6 +643,7 @@ function ActiveRuns({
   onToggleGroup,
   onToggleAccount,
   onSaveVoice,
+  onSaveHome,
   onPause,
   groups,
   onAddAccounts,
@@ -667,11 +671,15 @@ function ActiveRuns({
   onToggleGroup: (groupId: string, included: boolean) => void;
   onToggleAccount: (hubId: string, userId: string, included: boolean) => void;
   onSaveVoice: (userId: string, voice: PropVoice) => void;
+  onSaveHome: (userId: string, input: { hubId: string | null; languages: string[] }) => void;
   onPause: (hubId: string, paused: boolean) => void;
   groups: ConversationGroup[];
   onAddAccounts: (groupId: string, userIds: string[]) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const homeOptions = regions
+    .filter((region) => region.hubId)
+    .map((region) => ({ hubId: region.hubId, label: region.place || region.title }));
   const openRun = regions.find((run) => run.hubId === openId) ?? null;
   const interacting = regions.filter((run) => run.interacting).length;
   const quiet = regions.length - interacting;
@@ -764,6 +772,8 @@ function ActiveRuns({
           onToggleGroup={onToggleGroup}
           onToggleAccount={onToggleAccount}
           onSaveVoice={onSaveVoice}
+          onSaveHome={onSaveHome}
+          homeOptions={homeOptions}
           onPause={onPause}
           groups={groups}
           onAddAccounts={onAddAccounts}
@@ -951,6 +961,8 @@ function RunScreen({
   onToggleGroup,
   onToggleAccount,
   onSaveVoice,
+  onSaveHome,
+  homeOptions,
   onPause,
   groups,
   onAddAccounts,
@@ -979,6 +991,8 @@ function RunScreen({
   onToggleGroup: (groupId: string, included: boolean) => void;
   onToggleAccount: (hubId: string, userId: string, included: boolean) => void;
   onSaveVoice: (userId: string, voice: PropVoice) => void;
+  onSaveHome: (userId: string, input: { hubId: string | null; languages: string[] }) => void;
+  homeOptions: Array<{ hubId: string; label: string }>;
   onPause: (hubId: string, paused: boolean) => void;
   groups: ConversationGroup[];
   onAddAccounts: (groupId: string, userIds: string[]) => void;
@@ -1489,8 +1503,22 @@ function RunScreen({
                     <li key={account.userId} className="rounded-2xl border border-zinc-800 px-3 py-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-sm font-medium text-zinc-100">{account.name}</p>
+                          <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-100">
+                            {account.name}
+                            {account.visitorFrom ? (
+                              <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-normal text-amber-100">
+                                Visitor from {account.visitorFrom}
+                              </span>
+                            ) : null}
+                          </p>
                           <p className="mt-1 text-xs text-zinc-500">{account.groupTitles.join(" · ")}</p>
+                          <AccountHome
+                            key={`${account.userId}:${account.home?.hubId ?? ""}:${account.home?.languages.join(",") ?? ""}`}
+                            account={account}
+                            options={homeOptions}
+                            disabled={busy}
+                            onSave={(input) => onSaveHome(account.userId, input)}
+                          />
                         </div>
                         <button
                           type="button"
@@ -2638,6 +2666,68 @@ function CardPager({
           Next
         </button>
       </div>
+    </div>
+  );
+}
+
+function AccountHome({
+  account,
+  options,
+  disabled,
+  onSave,
+}: {
+  account: RegionRunAccount;
+  options: Array<{ hubId: string; label: string }>;
+  disabled: boolean;
+  onSave: (input: { hubId: string | null; languages: string[] }) => void;
+}) {
+  const home = account.home;
+  const [open, setOpen] = useState(false);
+  const [hubId, setHubId] = useState(home?.source === "set" ? home.hubId : "");
+  const [languages, setLanguages] = useState(home?.languagesSet ? home.languages.join(", ") : "");
+  const choices = home && !options.some((option) => option.hubId === home.hubId) ? [...options, { hubId: home.hubId, label: home.place }] : options;
+  const fieldCls = "rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-cyan-400/50";
+
+  return (
+    <div className="mt-1 text-xs text-zinc-500">
+      <p>
+        {home
+          ? `Home ${home.place || "unknown"}${home.source === "groups" ? " (from its groups)" : ""} · writes ${home.languages.join(", ")}`
+          : "No home yet"}
+        <button type="button" disabled={disabled} onClick={() => setOpen(!open)} className="ml-2 text-cyan-200/90 disabled:opacity-50">
+          {open ? "Cancel" : "Change"}
+        </button>
+      </p>
+      {open ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select value={hubId} disabled={disabled} onChange={(event) => setHubId(event.target.value)} className={fieldCls}>
+            <option value="">From its groups</option>
+            {choices.map((option) => (
+              <option key={option.hubId} value={option.hubId}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <input
+            value={languages}
+            disabled={disabled}
+            onChange={(event) => setLanguages(event.target.value)}
+            placeholder="Languages, e.g. English, Spanish"
+            className={`${fieldCls} w-52`}
+          />
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              onSave({ hubId: hubId || null, languages: languages.split(",").map((language) => language.trim()).filter(Boolean) });
+              setOpen(false);
+            }}
+            className="rounded-lg border border-cyan-400/30 px-2 py-1 text-cyan-100 disabled:opacity-50"
+          >
+            Save
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

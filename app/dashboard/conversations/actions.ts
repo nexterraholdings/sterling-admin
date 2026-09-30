@@ -30,6 +30,7 @@ import {
 } from "@/lib/conversations/db";
 import { addPostsForToday, fillWeekForGroup, runConversationTick } from "@/lib/conversations/tick";
 import { saveRegionLocale, saveRegionObjective, setAccountExcluded, setRunPaused } from "@/lib/conversations/region-runs";
+import { savePropHome } from "@/lib/conversations/prop-home";
 import { parseWeekDays } from "@/lib/conversations/week";
 import type { SwearRate } from "@/lib/conversations/rules";
 import type { PropVoice } from "@/lib/prop-voice";
@@ -262,6 +263,15 @@ export async function saveGroupConversation(input: {
 }): Promise<ConversationDashboard> {
   await requireAdmin(OPERATOR_ROLES);
   await saveConversationGroup(input);
+  return loadConversationDashboard();
+}
+
+export async function savePropHomeAction(
+  userId: string,
+  input: { hubId: string | null; languages: string[] },
+): Promise<ConversationDashboard> {
+  await requireAdmin(OPERATOR_ROLES);
+  await savePropHome(userId, input);
   return loadConversationDashboard();
 }
 
